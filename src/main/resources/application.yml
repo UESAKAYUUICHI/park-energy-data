@@ -1,0 +1,49 @@
+server:
+  port: 8102
+
+spring:
+  application:
+    name: park-energy-data
+  datasource:
+    url: ${PARK_DB_URL:jdbc:mysql://localhost:3306/park_energy_system?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true}
+    username: root
+    password: 123456
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  rabbitmq:
+    host: ${PARK_RABBITMQ_HOST:localhost}
+    port: ${PARK_RABBITMQ_PORT:5672}
+    username: ${PARK_RABBITMQ_USERNAME:guest}
+    password: ${PARK_RABBITMQ_PASSWORD:guest}
+    listener:
+      simple:
+        acknowledge-mode: manual
+        prefetch: 10
+        retry:
+          enabled: false
+  data:
+    redis:
+      host: ${PARK_REDIS_HOST:localhost}
+      port: ${PARK_REDIS_PORT:6379}
+      password: ${PARK_REDIS_PASSWORD:}
+      timeout: 3s
+
+park:
+  rabbitmq:
+    exchange: park.energy.exchange
+    raw-data-queue: raw_electric_data
+    raw-data-routing-key: data.raw
+  data:
+    consumer-enabled: true
+    message-dedup-ttl-minutes: 60
+    realtime-ttl-minutes: 30
+    iotdb:
+      enabled: true
+      driver-class-name: org.apache.iotdb.jdbc.IoTDBDriver
+      jdbc-url: ${PARK_IOTDB_URL:jdbc:iotdb://localhost:6667/}
+      username: ${PARK_IOTDB_USERNAME:root}
+      password: ${PARK_IOTDB_PASSWORD:root}
+      storage-group: root.park_energy.device
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true

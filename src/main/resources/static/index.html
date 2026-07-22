@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Data 调试台</title>
+  <style>
+    :root {
+      --bg: #f5f7fa;
+      --panel: #fff;
+      --line: #d9dee7;
+      --text: #20242c;
+      --muted: #667085;
+      --accent: #1d4ed8;
+      --ok: #137333;
+      --warn: #a15c07;
+      --danger: #b42318;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-width: 1680px;
+      background: var(--bg);
+      color: var(--text);
+      font: 13px/1.45 "Segoe UI", "Microsoft YaHei", Arial, sans-serif;
+    }
+    header {
+      height: 58px;
+      padding: 0 18px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--panel);
+      border-bottom: 1px solid var(--line);
+    }
+    h1 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: 0; }
+    main {
+      padding: 14px;
+      display: grid;
+      grid-template-columns: 430px 1fr 530px;
+      grid-template-rows: auto 1fr auto;
+      gap: 12px;
+      align-items: start;
+    }
+    .strip {
+      grid-column: 1 / 4;
+      display: grid;
+      grid-template-columns: 1fr 1.3fr 1fr 1fr 1.5fr 1fr;
+      gap: 10px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .metric { padding: 10px 12px; min-height: 60px; }
+    .label { color: var(--muted); font-size: 12px; margin-bottom: 5px; }
+    .value { font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
+    .head {
+      height: 44px;
+      padding: 0 12px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      border-bottom: 1px solid var(--line);
+    }
+    h2 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: 0; }
+    .body { padding: 12px; }
+    .tools, .formline {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .formline { margin-bottom: 8px; }
+    input, select, button {
+      min-height: 32px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fff;
+      color: var(--text);
+      font: inherit;
+      padding: 6px 9px;
+    }
+    button { cursor: pointer; padding: 0 11px; }
+    button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+    button:disabled { opacity: .65; cursor: wait; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    th, td {
+      padding: 8px 7px;
+      border-bottom: 1px solid #edf0f4;
+      text-align: left;
+      vertical-align: top;
+      overflow-wrap: anywhere;
+    }
+    th { color: var(--muted); font-size: 12px; font-weight: 600; background: #fbfcfd; }
+    tr:last-child td { border-bottom: 0; }
+    .kv {
+      display: grid;
+      grid-template-columns: 110px 1fr;
+      gap: 7px 10px;
+      margin-bottom: 10px;
+    }
+    .kv div:nth-child(odd) { color: var(--muted); font-size: 12px; }
+    .points {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .point {
+      min-height: 54px;
+      padding: 8px 9px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: #fbfcfd;
+    }
+    .point .name { color: var(--muted); font-size: 12px; margin-bottom: 4px; overflow-wrap: anywhere; }
+    .point .val { font-size: 15px; font-weight: 650; overflow-wrap: anywhere; }
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 21px;
+      padding: 1px 7px;
+      border-radius: 999px;
+      background: #eef2f7;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+    }
+    .ok { background: #e7f5ec; color: var(--ok); }
+    .warn { background: #fff4df; color: var(--warn); }
+    .danger { background: #fdeaea; color: var(--danger); }
+    .info { background: #e9f1ff; color: var(--accent); }
+    .hint { color: var(--muted); font-size: 12px; }
+    .stack { display: grid; gap: 12px; }
+    .log {
+      height: 84px;
+      padding: 9px 10px;
+      background: #1f2937;
+      color: #e5e7eb;
+      border-radius: 7px;
+      font: 12px/1.35 Consolas, "Cascadia Mono", monospace;
+      white-space: pre-wrap;
+      overflow: hidden;
+    }
+    #historyPanel { grid-column: 2 / 3; }
+    #rightPanel { grid-column: 3 / 4; }
+    #logPanel { grid-column: 1 / 4; }
+    dialog {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 0;
+      width: min(900px, calc(100vw - 40px));
+    }
+    dialog::backdrop { background: rgba(15, 23, 42, .35); }
+    pre {
+      margin: 0;
+      padding: 14px;
+      max-height: 70vh;
+      overflow: auto;
+      background: #f8fafc;
+      font: 12px/1.45 Consolas, "Cascadia Mono", monospace;
+    }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Data 调试台</h1>
+  <div class="tools">
+    <button id="refreshRealtime" class="primary">刷新实时</button>
+    <label class="hint"><input id="autoRefresh" type="checkbox" checked style="min-height:auto"> 自动刷新</label>
+  </div>
+</header>
+
+<main>
+  <section class="strip">
+    <div class="card metric"><div class="label">Data 服务</div><div class="value">localhost:8102</div></div>
+    <div class="card metric">
+      <div class="label">队列</div>
+      <input id="queueName" value="raw_electric_data" placeholder="raw_electric_data" style="width:100%">
+    </div>
+    <div class="card metric"><div class="label">Redis</div><div class="value">localhost:6379</div></div>
+    <div class="card metric"><div class="label">IoTDB</div><div class="value">localhost:6667</div></div>
+    <div class="card metric"><div class="label">IoTDB 路径</div><div class="value">root.park_energy.device</div></div>
+    <div class="card metric"><div class="label">最近刷新</div><div id="lastRefresh" class="value">-</div></div>
+  </section>
+
+  <section class="card">
+    <div class="head">
+      <h2>实时数据</h2>
+      <div class="tools">
+        <input id="realtimeDeviceId" value="1" placeholder="deviceId" style="width:96px">
+        <button id="loadRealtime" class="primary">查询</button>
+      </div>
+    </div>
+    <div class="body">
+      <div id="realtimeSummary" class="kv"></div>
+      <div id="realtimePoints" class="points"></div>
+    </div>
+  </section>
+
+  <section id="historyPanel" class="card">
+    <div class="head"><h2>IoTDB 历史</h2><span id="historyCount" class="hint">-</span></div>
+    <div class="body">
+      <div class="formline">
+        <input id="historyDeviceId" value="1" placeholder="deviceId" style="width:92px">
+        <input id="historyPointCode" placeholder="pointCode 可空" style="width:150px">
+        <input id="historyStart" placeholder="startTime" style="width:190px">
+        <input id="historyEnd" placeholder="endTime" style="width:190px">
+        <button id="loadHistory" class="primary">查询</button>
+      </div>
+    </div>
+    <table>
+      <thead id="historyHead"></thead>
+      <tbody id="historyRows"></tbody>
+    </table>
+  </section>
+
+  <section id="rightPanel" class="stack">
+    <div class="card">
+      <div class="head"><h2>日统计</h2><span id="statsCount" class="hint">-</span></div>
+      <div class="body">
+        <div class="formline">
+          <input id="statsDeviceId" value="1" placeholder="deviceId" style="width:84px">
+          <input id="statsPointCode" value="total_active_energy" placeholder="pointCode" style="width:170px">
+          <input id="statsStart" placeholder="startDate" style="width:105px">
+          <input id="statsEnd" placeholder="endDate" style="width:105px">
+          <button id="loadStats" class="primary">查</button>
+        </div>
+      </div>
+      <table>
+        <thead id="statsHead"></thead>
+        <tbody id="statsRows"></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <div class="head"><h2>告警记录</h2><span id="alarmCount" class="hint">-</span></div>
+      <div class="body">
+        <div class="formline">
+          <input id="alarmDeviceId" placeholder="deviceId 可空" style="width:120px">
+          <select id="alarmDealStatus">
+            <option value="">全部</option>
+            <option value="0">未处理</option>
+            <option value="1">已处理</option>
+          </select>
+          <button id="loadAlarms" class="primary">查询</button>
+        </div>
+      </div>
+      <table>
+        <thead id="alarmHead"></thead>
+        <tbody id="alarmRows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="logPanel" class="card">
+    <div class="head"><h2>调试输出</h2><button id="clearLog">清空</button></div>
+    <div class="body"><div id="log" class="log"></div></div>
+  </section>
+</main>
+
+<dialog id="jsonDialog">
+  <div class="head"><h2>JSON 详情</h2><button onclick="jsonDialog.close()">关闭</button></div>
+  <pre id="jsonContent"></pre>
+</dialog>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const tableState = {};
+  let logLines = [];
+
+  function log(message, level = "info") {
+    const line = `[${new Date().toLocaleTimeString()}] ${level.toUpperCase()} ${message}`;
+    logLines = [line, ...logLines].slice(0, 5);
+    $("log").textContent = logLines.join("\n");
+  }
+
+  function dataOf(response) {
+    if (response && response.success === true) return response.data;
+    if (response && response.code === 0) return response.data;
+    throw new Error(response?.message || "接口返回失败");
+  }
+
+  async function getJson(url) {
+    const res = await fetch(url);
+    if (!res.ok) {
+      let text = "";
+      try { text = await res.text(); } catch (e) { text = ""; }
+      throw new Error(`${res.status} ${res.statusText}${text ? " " + text.slice(0, 120) : ""}`);
+    }
+    return dataOf(await res.json());
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? "").replace(/[&<>"']/g, s => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[s]));
+  }
+
+  function fmtTime(value) {
+    if (!value) return "-";
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? escapeHtml(value) : date.toLocaleString();
+  }
+
+  function showJson(value) {
+    $("jsonContent").textContent = JSON.stringify(value, null, 2);
+    $("jsonDialog").showModal();
+  }
+
+  function showTableJson(kind, index) {
+    showJson(tableState[kind][index]);
+  }
+
+  function paramsOf(values) {
+    const params = new URLSearchParams();
+    Object.entries(values).forEach(([key, value]) => {
+      if (value !== null && value !== undefined && String(value).trim() !== "") {
+        params.set(key, String(value).trim());
+      }
+    });
+    return params.toString();
+  }
+
+  function renderTable(kind, headEl, bodyEl, rows, maxRows = 6) {
+    tableState[kind] = rows || [];
+    if (!rows || rows.length === 0) {
+      headEl.innerHTML = "";
+      bodyEl.innerHTML = `<tr><td>暂无数据</td></tr>`;
+      return;
+    }
+    const keys = Array.from(rows.reduce((set, row) => {
+      Object.keys(row || {}).forEach(k => set.add(k));
+      return set;
+    }, new Set()));
+    headEl.innerHTML = `<tr>${keys.map(k => `<th>${escapeHtml(k)}</th>`).join("")}</tr>`;
+    bodyEl.innerHTML = rows.slice(0, maxRows).map((row, index) => `
+      <tr ondblclick="showTableJson('${kind}', ${index})">
+        ${keys.map(k => `<td>${escapeHtml(formatCell(row[k]))}</td>`).join("")}
+      </tr>`).join("");
+  }
+
+  function formatCell(value) {
+    if (value === null || value === undefined) return "-";
+    if (typeof value === "object") return JSON.stringify(value);
+    return value;
+  }
+
+  async function loadRealtime() {
+    const id = $("realtimeDeviceId").value.trim();
+    if (!id) throw new Error("请输入 deviceId");
+    const data = await getJson(`/api/data/realtime/devices/${encodeURIComponent(id)}`);
+    if (!data) {
+      $("realtimeSummary").innerHTML = `<div>结果</div><div><span class="badge warn">暂无实时缓存</span></div>`;
+      $("realtimePoints").innerHTML = "";
+      log(`设备 ${id} 暂无实时数据`, "warn");
+      return;
+    }
+    $("realtimeSummary").innerHTML = `
+      <div>deviceId</div><div>${escapeHtml(data.deviceId)}</div>
+      <div>deviceSn</div><div>${escapeHtml(data.deviceSn)}</div>
+      <div>gatewayId</div><div>${escapeHtml(data.gatewayId)}</div>
+      <div>collectTime</div><div>${fmtTime(data.collectTime)}</div>
+      <div>dataQuality</div><div><span class="badge ok">${escapeHtml(data.dataQuality)}</span></div>`;
+    const points = Object.entries(data.points || {});
+    $("realtimePoints").innerHTML = points.slice(0, 8).map(([name, value]) => `
+      <div class="point">
+        <div class="name">${escapeHtml(name)}</div>
+        <div class="val">${escapeHtml(value)}</div>
+      </div>`).join("");
+    log(`实时数据已刷新: deviceId=${id}, points=${points.length}`);
+    $("lastRefresh").textContent = new Date().toLocaleTimeString();
+  }
+
+  async function loadHistory() {
+    const query = paramsOf({
+      deviceId: $("historyDeviceId").value,
+      pointCode: $("historyPointCode").value,
+      startTime: $("historyStart").value,
+      endTime: $("historyEnd").value
+    });
+    const rows = await getJson(`/api/data/history?${query}`);
+    renderTable("history", $("historyHead"), $("historyRows"), rows, 8);
+    $("historyCount").textContent = `${rows.length} 条，显示前 8 条`;
+    log(`历史数据 ${rows.length} 条`);
+  }
+
+  async function loadStats() {
+    const query = paramsOf({
+      deviceId: $("statsDeviceId").value,
+      pointCode: $("statsPointCode").value,
+      startDate: $("statsStart").value,
+      endDate: $("statsEnd").value
+    });
+    const rows = await getJson(`/api/data/statistics/daily?${query}`);
+    renderTable("stats", $("statsHead"), $("statsRows"), rows, 4);
+    $("statsCount").textContent = `${rows.length} 条`;
+    log(`日统计 ${rows.length} 条`);
+  }
+
+  async function loadAlarms() {
+    const query = paramsOf({
+      deviceId: $("alarmDeviceId").value,
+      dealStatus: $("alarmDealStatus").value
+    });
+    const rows = await getJson(`/api/data/alarms?${query}`);
+    renderTable("alarms", $("alarmHead"), $("alarmRows"), rows, 4);
+    $("alarmCount").textContent = `${rows.length} 条`;
+    log(`告警记录 ${rows.length} 条`);
+  }
+
+  $("loadRealtime").addEventListener("click", () => loadRealtime().catch(e => log(e.message, "error")));
+  $("refreshRealtime").addEventListener("click", () => loadRealtime().catch(e => log(e.message, "error")));
+  $("loadHistory").addEventListener("click", () => loadHistory().catch(e => log(e.message, "error")));
+  $("loadStats").addEventListener("click", () => loadStats().catch(e => log(e.message, "error")));
+  $("loadAlarms").addEventListener("click", () => loadAlarms().catch(e => log(e.message, "error")));
+  $("clearLog").addEventListener("click", () => { logLines = []; $("log").textContent = ""; });
+  setInterval(() => { if ($("autoRefresh").checked) loadRealtime().catch(e => log(e.message, "error")); }, 10000);
+  loadRealtime().catch(e => log(e.message, "error"));
+  loadAlarms().catch(e => log(e.message, "error"));
+</script>
+</body>
+</html>
