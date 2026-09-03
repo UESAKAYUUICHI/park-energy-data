@@ -5,6 +5,7 @@ import java.io.IOException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.parkenergydata.dto.AccessForwardMessage;
 import com.parkenergydata.dto.GatewayUploadPayload;
+import com.parkenergydata.dto.GatewayAlarmPayload;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -21,5 +22,9 @@ public class PayloadParser {
 
     public GatewayUploadPayload parseGatewayPayload(String rawPayload) throws IOException {
         return objectMapper.readValue(rawPayload, GatewayUploadPayload.class);
+    }
+
+    public GatewayAlarmPayload parseGatewayAlarmPayload(String rawPayload) throws IOException {
+        return objectMapper.readValue(rawPayload, GatewayAlarmPayload.class);
     }
 }

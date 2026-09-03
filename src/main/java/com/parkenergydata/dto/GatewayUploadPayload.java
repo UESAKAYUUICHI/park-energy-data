@@ -11,6 +11,7 @@ public record GatewayUploadPayload(
         @JsonAlias("gateway_sn") String gatewaySn,
         Long timestamp,
         String type,
-        List<MeterPayload> meters
+        List<MeterPayload> meters,
+        @JsonAlias("schema_version") String schemaVersion
 ) {
 }
