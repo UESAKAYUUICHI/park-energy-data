@@ -13,10 +13,11 @@ import org.apache.ibatis.annotations.Select;
 @Mapper
 public interface PointMappingRepository {
     @Select("""
-            SELECT id, device_type_id, point_code, protocol_type, source_path, value_type,
+            SELECT id, device_type_id, point_code, protocol_type, source_path,
+                   function_code, register_address, register_length, value_type, byte_order,
                    scale_factor, offset_value, expression, required
             FROM dev_point_mapping
-            WHERE device_type_id = #{deviceTypeId} AND UPPER(protocol_type) = 'JSON'
+            WHERE device_type_id = #{deviceTypeId}
             """)
     @ConstructorArgs({
             @Arg(column = "id", javaType = Long.class),
@@ -24,11 +25,15 @@ public interface PointMappingRepository {
             @Arg(column = "point_code", javaType = String.class),
             @Arg(column = "protocol_type", javaType = String.class),
             @Arg(column = "source_path", javaType = String.class),
+            @Arg(column = "function_code", javaType = String.class),
+            @Arg(column = "register_address", javaType = Integer.class),
+            @Arg(column = "register_length", javaType = Integer.class),
             @Arg(column = "value_type", javaType = String.class),
+            @Arg(column = "byte_order", javaType = String.class),
             @Arg(column = "scale_factor", javaType = BigDecimal.class),
             @Arg(column = "offset_value", javaType = BigDecimal.class),
             @Arg(column = "expression", javaType = String.class),
             @Arg(column = "required", javaType = boolean.class)
     })
-    List<DevPointMapping> findJsonMappingListByDeviceType(@Param("deviceTypeId") Long deviceTypeId);
+    List<DevPointMapping> findMappingListByDeviceType(@Param("deviceTypeId") Long deviceTypeId);
 }

@@ -21,6 +21,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class IotDbTimeSeriesWriter implements TimeSeriesWriter {
     private final ParkDataProperties properties;
+    private volatile boolean storageGroupReady;
 
     public IotDbTimeSeriesWriter(ParkDataProperties properties) {
         this.properties = properties;
@@ -42,7 +43,7 @@ public class IotDbTimeSeriesWriter implements TimeSeriesWriter {
 
     @Override
     public List<Map<String, Object>> queryHistory(Long deviceId, String pointCode, String startTime, String endTime) {
-        return queryHistory(deviceId, pointCode, startTime, endTime, 500);
+        return queryHistory(deviceId, pointCode, startTime, endTime, 10000);
     }
 
     @Override
@@ -50,7 +51,7 @@ public class IotDbTimeSeriesWriter implements TimeSeriesWriter {
         if (!properties.iotdb().enabled()) {
             return List.of();
         }
-        String select = pointCode == null || pointCode.isBlank() ? "*" : pointCode.trim();
+        String select = pointCode == null || pointCode.isBlank() ? "*" : validatedPointCode(pointCode);
         StringBuilder sql = new StringBuilder("SELECT " + select + " FROM " + devicePath(deviceId));
         StringJoiner where = new StringJoiner(" AND ");
         if (startTime != null && !startTime.isBlank()) {
@@ -63,7 +64,7 @@ public class IotDbTimeSeriesWriter implements TimeSeriesWriter {
         if (!whereClause.isBlank()) {
             sql.append(" WHERE ").append(whereClause);
         }
-        sql.append(" LIMIT ").append(Math.max(1, Math.min(limit, 100000)));
+        sql.append(" ORDER BY TIME ASC LIMIT ").append(Math.max(1, Math.min(limit, 100000)));
         try (Connection connection = connection();
              Statement statement = connection.createStatement();
              ResultSet rs = statement.executeQuery(sql.toString())) {
@@ -71,8 +72,15 @@ public class IotDbTimeSeriesWriter implements TimeSeriesWriter {
             List<Map<String, Object>> rows = new ArrayList<>();
             while (rs.next()) {
                 Map<String, Object> row = new LinkedHashMap<>();
-                for (int i = 1; i <= meta.getColumnCount(); i++) {
-                    row.put(meta.getColumnLabel(i), rs.getObject(i));
+                Object time = rs.getObject(1);
+                row.put("time", time);
+                if (select.equals("*")) {
+                    for (int i = 2; i <= meta.getColumnCount(); i++) {
+                        row.put(measurementName(meta.getColumnLabel(i)), rs.getObject(i));
+                    }
+                } else {
+                    row.put("pointCode", select);
+                    row.put("value", meta.getColumnCount() >= 2 ? rs.getObject(2) : null);
                 }
                 rows.add(row);
             }
@@ -84,10 +92,32 @@ public class IotDbTimeSeriesWriter implements TimeSeriesWriter {
 
     private void execute(String sql) {
         try (Connection connection = connection(); Statement statement = connection.createStatement()) {
+            ensureStorageGroup(statement);
             statement.execute(sql);
         } catch (SQLException ex) {
-            throw new IllegalStateException("IoTDB write failed: " + sql, ex);
+            throw new IllegalStateException("IoTDB write failed: " + ex.getMessage(), ex);
         }
+    }
+
+    private synchronized void ensureStorageGroup(Statement statement) throws SQLException {
+        if (storageGroupReady) {
+            return;
+        }
+        if (!storageGroupExists(statement)) {
+            statement.execute("CREATE DATABASE " + databasePath());
+        }
+        storageGroupReady = true;
+    }
+
+    private boolean storageGroupExists(Statement statement) throws SQLException {
+        try (ResultSet databases = statement.executeQuery("SHOW DATABASES")) {
+            while (databases.next()) {
+                if (databasePath().equalsIgnoreCase(databases.getString(1))) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private Connection connection() throws SQLException {
@@ -111,11 +141,33 @@ public class IotDbTimeSeriesWriter implements TimeSeriesWriter {
     }
 
     private String devicePath(Long deviceId) {
+        return storageGroup() + ".d_" + deviceId;
+    }
+
+    private String storageGroup() {
         String group = properties.iotdb().storageGroup();
-        if (group == null || group.isBlank()) {
-            group = "root.park_energy.device";
+        return group == null || group.isBlank() ? "root.park_energy.device" : group;
+    }
+
+    private String databasePath() {
+        String[] nodes = storageGroup().split("\\.");
+        if (nodes.length < 2 || !"root".equalsIgnoreCase(nodes[0])) {
+            throw new IllegalStateException("IoTDB storage group must start with root.<database>: " + storageGroup());
         }
-        return group + ".d_" + deviceId;
+        return nodes[0] + "." + nodes[1];
+    }
+
+    private String validatedPointCode(String pointCode) {
+        String value = pointCode.trim();
+        if (!value.matches("[A-Za-z][A-Za-z0-9_]{0,63}")) {
+            throw new IllegalArgumentException("Invalid pointCode: " + pointCode);
+        }
+        return value;
+    }
+
+    private String measurementName(String columnLabel) {
+        int separator = columnLabel == null ? -1 : columnLabel.lastIndexOf('.');
+        return separator >= 0 ? columnLabel.substring(separator + 1) : columnLabel;
     }
 
     private String formatValue(Object value) {
@@ -129,7 +181,7 @@ public class IotDbTimeSeriesWriter implements TimeSeriesWriter {
         try {
             return String.valueOf(Instant.parse(input).toEpochMilli());
         } catch (Exception ex) {
-            return "'" + input.replace("'", "\\'") + "'";
+            throw new IllegalArgumentException("Time must be ISO-8601 with timezone: " + input, ex);
         }
     }
 }
