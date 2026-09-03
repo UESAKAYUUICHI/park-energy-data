@@ -15,15 +15,20 @@ public interface StatsDailyPointRepository {
     @Insert("""
             INSERT INTO stats_daily_point
               (device_id, device_type_id, org_id, point_code, stat_date,
-               start_value, end_value, usage_value, max_value, min_value, avg_value, data_complete_rate)
+               first_collect_time, last_collect_time, start_value, end_value, usage_value, max_value, min_value, avg_value, data_complete_rate, sample_count)
             VALUES (#{deviceId}, #{deviceTypeId}, #{orgId}, #{pointCode}, #{statDate},
-                    #{value}, #{value}, #{initialUsage}, #{value}, #{value}, #{value}, 100.00)
+                    #{collectTime}, #{collectTime}, #{value}, #{value}, #{initialUsage}, #{value}, #{value}, #{value}, 100.00, 1)
             ON DUPLICATE KEY UPDATE
-              end_value = VALUES(end_value),
-              usage_value = IF(#{accumulated} = 1, VALUES(end_value) - COALESCE(start_value, VALUES(end_value)), usage_value),
+              start_value = IF(first_collect_time IS NULL OR VALUES(first_collect_time) < first_collect_time, VALUES(start_value), start_value),
+              first_collect_time = IF(first_collect_time IS NULL OR VALUES(first_collect_time) < first_collect_time, VALUES(first_collect_time), first_collect_time),
+              end_value = IF(last_collect_time IS NULL OR VALUES(last_collect_time) >= last_collect_time, VALUES(end_value), end_value),
+              usage_value = IF(#{accumulated} = 1, GREATEST(0, IF(last_collect_time IS NULL OR VALUES(last_collect_time) >= last_collect_time, VALUES(end_value), end_value) - COALESCE(start_value, VALUES(start_value))), usage_value),
+              last_collect_time = IF(last_collect_time IS NULL OR VALUES(last_collect_time) >= last_collect_time, VALUES(last_collect_time), last_collect_time),
               max_value = GREATEST(COALESCE(max_value, VALUES(max_value)), VALUES(max_value)),
               min_value = LEAST(COALESCE(min_value, VALUES(min_value)), VALUES(min_value)),
-              avg_value = IF(avg_value IS NULL, VALUES(avg_value), (avg_value + VALUES(avg_value)) / 2),
+              avg_value = IF(avg_value IS NULL, VALUES(avg_value),
+                  (avg_value * sample_count + VALUES(avg_value)) / (sample_count + 1)),
+              sample_count = sample_count + 1,
               update_time = CURRENT_TIMESTAMP
             """)
     void upsert(@Param("deviceId") Long deviceId,
@@ -31,6 +36,7 @@ public interface StatsDailyPointRepository {
                 @Param("orgId") Long orgId,
                 @Param("pointCode") String pointCode,
                 @Param("statDate") LocalDate statDate,
+                @Param("collectTime") java.sql.Timestamp collectTime,
                 @Param("value") BigDecimal value,
                 @Param("initialUsage") BigDecimal initialUsage,
                 @Param("accumulated") int accumulated);

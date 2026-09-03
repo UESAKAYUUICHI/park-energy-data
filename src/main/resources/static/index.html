@@ -181,7 +181,7 @@
       <div class="label">队列</div>
       <input id="queueName" value="raw_electric_data" placeholder="raw_electric_data" style="width:100%">
     </div>
-    <div class="card metric"><div class="label">Redis</div><div class="value">localhost:6379</div></div>
+    <div class="card metric"><div class="label">Redis</div><div class="value">115.159.222.238:6379</div></div>
     <div class="card metric"><div class="label">IoTDB</div><div class="value">localhost:6667</div></div>
     <div class="card metric"><div class="label">IoTDB 路径</div><div class="value">root.park_energy.device</div></div>
     <div class="card metric"><div class="label">最近刷新</div><div id="lastRefresh" class="value">-</div></div>
@@ -362,23 +362,28 @@
       <div>deviceSn</div><div>${escapeHtml(data.deviceSn)}</div>
       <div>gatewayId</div><div>${escapeHtml(data.gatewayId)}</div>
       <div>collectTime</div><div>${fmtTime(data.collectTime)}</div>
-      <div>dataQuality</div><div><span class="badge ok">${escapeHtml(data.dataQuality)}</span></div>`;
-    const points = Object.entries(data.points || {});
-    $("realtimePoints").innerHTML = points.slice(0, 8).map(([name, value]) => `
+      <div>receiveTime</div><div>${fmtTime(data.receiveTime)}</div>
+      <div>delaySeconds</div><div>${escapeHtml(data.delaySeconds)}</div>
+      <div>freshness</div><div><span class="badge ${data.freshnessStatus === "FRESH" ? "ok" : "warn"}">${escapeHtml(data.freshnessStatus)}</span></div>
+      <div>quality</div><div><span class="badge ok">${escapeHtml(data.qualityStatus)}</span></div>`;
+    const points = Array.isArray(data.pointDetails) ? data.pointDetails : Object.entries(data.points || {}).map(([pointCode, value]) => ({ pointCode, pointName: pointCode, value, unit: "" }));
+    $("realtimePoints").innerHTML = points.map((point) => `
       <div class="point">
-        <div class="name">${escapeHtml(name)}</div>
-        <div class="val">${escapeHtml(value)}</div>
+        <div class="name">${escapeHtml(point.pointName)} (${escapeHtml(point.pointCode)})</div>
+        <div class="val">${escapeHtml(point.value)} ${escapeHtml(point.unit || "")}</div>
       </div>`).join("");
     log(`实时数据已刷新: deviceId=${id}, points=${points.length}`);
     $("lastRefresh").textContent = new Date().toLocaleTimeString();
   }
 
   async function loadHistory() {
+    const startValue = $("historyStart").value;
+    const endValue = $("historyEnd").value;
     const query = paramsOf({
       deviceId: $("historyDeviceId").value,
       pointCode: $("historyPointCode").value,
-      startTime: $("historyStart").value,
-      endTime: $("historyEnd").value
+      startTime: startValue ? new Date(startValue).toISOString() : "",
+      endTime: endValue ? new Date(endValue).toISOString() : ""
     });
     const rows = await getJson(`/api/data/history?${query}`);
     renderTable("history", $("historyHead"), $("historyRows"), rows, 8);

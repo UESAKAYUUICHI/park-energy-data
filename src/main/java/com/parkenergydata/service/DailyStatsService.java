@@ -3,6 +3,7 @@ package com.parkenergydata.service;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.sql.Timestamp;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.ArrayList;
@@ -26,24 +27,22 @@ public class DailyStatsService {
     private final DeviceRepository deviceRepository;
     private final PointDefinitionRepository pointDefinitionRepository;
     private final TimeSeriesWriter timeSeriesWriter;
+    private final StatsPointBatchWriter batchWriter;
 
     public DailyStatsService(StatsDailyPointRepository repository, DeviceRepository deviceRepository,
-                             PointDefinitionRepository pointDefinitionRepository, TimeSeriesWriter timeSeriesWriter) {
+                             PointDefinitionRepository pointDefinitionRepository, TimeSeriesWriter timeSeriesWriter,
+                             StatsPointBatchWriter batchWriter) {
         this.repository = repository;
         this.deviceRepository = deviceRepository;
         this.pointDefinitionRepository = pointDefinitionRepository;
         this.timeSeriesWriter = timeSeriesWriter;
+        this.batchWriter = batchWriter;
     }
 
     public void updateDaily(DevDevice device, Instant collectTime, List<ParsedPoint> points) {
-        LocalDate statDate = collectTime.atZone(ZoneId.systemDefault()).toLocalDate();
-        for (ParsedPoint point : points) {
-            if (point.statEnabled() && point.numericValue() != null) {
-                boolean accumulated = "TOTAL_ACCUMULATED".equalsIgnoreCase(point.businessRole());
-                repository.upsert(device.id(), device.deviceTypeId(), device.orgId(), point.pointCode(), statDate,
-                        point.numericValue(), accumulated ? java.math.BigDecimal.ZERO : null, accumulated ? 1 : 0);
-            }
-        }
+        // Daily statistics, TOU buckets and the settlement quality gate must share one business timezone.
+        LocalDate statDate = collectTime.atZone(ZoneId.of("Asia/Shanghai")).toLocalDate();
+        batchWriter.upsertDaily(device, statDate, Timestamp.from(collectTime), points);
     }
 
     public List<Map<String, Object>> findDaily(Long deviceId, String pointCode, String startDate, String endDate) {
