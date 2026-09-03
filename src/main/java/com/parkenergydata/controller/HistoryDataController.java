@@ -26,4 +26,5 @@ public class HistoryDataController {
                                                           @RequestParam(required = false) String endTime) {
         return ApiResponse.ok(historyQueryService.queryHistory(deviceId, pointCode, startTime, endTime));
     }
+
 }

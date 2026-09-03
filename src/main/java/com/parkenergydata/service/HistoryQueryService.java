@@ -17,4 +17,5 @@ public class HistoryQueryService {
     public List<Map<String, Object>> queryHistory(Long deviceId, String pointCode, String startTime, String endTime) {
         return timeSeriesWriter.queryHistory(deviceId, pointCode, startTime, endTime);
     }
+
 }
