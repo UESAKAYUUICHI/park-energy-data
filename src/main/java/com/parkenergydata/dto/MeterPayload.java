@@ -11,6 +11,20 @@ public record MeterPayload(
         @JsonAlias("collect_time") Long collectTime,
         Integer quality,
         JsonNode registers,
-        JsonNode points
+        JsonNode points,
+        JsonNode payload
 ) {
+    /**
+     * Returns the canonical device data body while accepting the legacy
+     * points/registers envelopes used by existing gateways.
+     */
+    public JsonNode normalizedPayload() {
+        if (payload != null && !payload.isNull() && !payload.isMissingNode()) {
+            return payload;
+        }
+        if (points != null && !points.isNull() && !points.isMissingNode()) {
+            return points;
+        }
+        return registers;
+    }
 }
