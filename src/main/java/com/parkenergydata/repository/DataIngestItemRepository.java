@@ -1,6 +1,7 @@
 package com.parkenergydata.repository;
 
 import com.parkenergydata.dto.AccessForwardMessage;
+import com.parkenergydata.dto.MeterPayload;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 
@@ -16,10 +17,35 @@ public class DataIngestItemRepository {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    public boolean tryClaim(AccessForwardMessage forward, String deviceSn, Instant collectTime) {
+    public boolean tryClaim(AccessForwardMessage forward, MeterPayload meter, Instant collectTime) {
+        String deviceSn = meter == null ? null : meter.deviceSn();
         if (forward.rawLogId() <= 0 || deviceSn == null || deviceSn.isBlank()) {
             return true;
         }
+        int inserted = jdbcTemplate.update("""
+                INSERT IGNORE INTO data_ingest_item
+                  (raw_log_id, gateway_id, device_sn, channel_id, modbus_addr, profile_key, model_version,
+                   config_revision, collect_time, status, received_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'PROCESSING', ?)
+                """, forward.rawLogId(), forward.gatewayId(), deviceSn, blankToNull(meter.channelId()), meter.modbusAddr(),
+                blankToNull(meter.profileKey()), blankToNull(meter.modelVersion()), blankToNull(meter.configRevision()),
+                timestamp(collectTime), timestamp(forward.receivedAt()));
+        if (inserted == 1) return true;
+        return jdbcTemplate.update("""
+                UPDATE data_ingest_item
+                SET status = 'PROCESSING', processed_at = NULL, error_code = NULL, error_reason = NULL,
+                    retry_count = retry_count + 1, channel_id = ?, modbus_addr = ?, profile_key = ?,
+                    model_version = ?, config_revision = ?
+                WHERE raw_log_id = ? AND device_sn = ? AND collect_time <=> ?
+                  AND status IN ('INVALID', 'DEAD_LETTER', 'REPLAY_REQUESTED')
+                """, blankToNull(meter.channelId()), meter.modbusAddr(), blankToNull(meter.profileKey()),
+                blankToNull(meter.modelVersion()), blankToNull(meter.configRevision()), forward.rawLogId(),
+                deviceSn, timestamp(collectTime)) == 1;
+    }
+
+    /** Compatibility overload for older unit tests and replayers. */
+    public boolean tryClaim(AccessForwardMessage forward, String deviceSn, Instant collectTime) {
+        if (forward.rawLogId() <= 0 || deviceSn == null || deviceSn.isBlank()) return true;
         int inserted = jdbcTemplate.update("""
                 INSERT IGNORE INTO data_ingest_item
                   (raw_log_id, gateway_id, device_sn, collect_time, status, received_at)
@@ -54,6 +80,10 @@ public class DataIngestItemRepository {
 
     private Timestamp timestamp(Instant value) {
         return Timestamp.from(value == null ? Instant.now() : value);
+    }
+
+    private String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value.trim();
     }
 
     private String shortReason(String reason) {

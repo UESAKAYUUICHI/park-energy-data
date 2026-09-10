@@ -18,6 +18,7 @@ import com.parkenergydata.entity.DevPointDefinition;
 import com.parkenergydata.entity.DevPointMapping;
 import com.parkenergydata.parser.JsonPointParser;
 import com.parkenergydata.repository.CollectionQualityRepository;
+import com.parkenergydata.repository.CollectionWindowQualityRepository;
 import com.parkenergydata.repository.DataIngestEventRepository;
 import com.parkenergydata.repository.DataIngestItemRepository;
 import com.parkenergydata.repository.DeviceRepository;
@@ -39,6 +40,7 @@ public class DataIngestService {
     private final DailyStatsService dailyStatsService;
     private final HourlyStatsService hourlyStatsService;
     private final CollectionQualityRepository collectionQualityRepository;
+    private final CollectionWindowQualityRepository collectionWindowQualityRepository;
     private final TouStatsService touStatsService;
     private final AlarmEvaluateService alarmEvaluateService;
 
@@ -49,7 +51,8 @@ public class DataIngestService {
                              TimeSeriesWriter timeSeriesWriter, DailyStatsService dailyStatsService,
                              HourlyStatsService hourlyStatsService, TouStatsService touStatsService,
                              AlarmEvaluateService alarmEvaluateService,
-                             CollectionQualityRepository collectionQualityRepository) {
+                             CollectionQualityRepository collectionQualityRepository,
+                             CollectionWindowQualityRepository collectionWindowQualityRepository) {
         this.deviceCache = deviceCache;
         this.rateLimiter = rateLimiter;
         this.ingestEventRepository = ingestEventRepository;
@@ -63,6 +66,7 @@ public class DataIngestService {
         this.touStatsService = touStatsService;
         this.alarmEvaluateService = alarmEvaluateService;
         this.collectionQualityRepository = collectionQualityRepository;
+        this.collectionWindowQualityRepository = collectionWindowQualityRepository;
     }
 
     /** Compatibility constructor retained for isolated unit tests and non-Spring callers. */
@@ -75,7 +79,7 @@ public class DataIngestService {
                              CollectionQualityRepository collectionQualityRepository) {
         this(new IngestDeviceCache(deviceRepository), new GatewayDeviceRateLimiter(120), ingestEventRepository,
                 ingestItemRepository, metadataService, pointParser, realtimeCacheService, timeSeriesWriter,
-                dailyStatsService, hourlyStatsService, touStatsService, alarmEvaluateService, collectionQualityRepository);
+                dailyStatsService, hourlyStatsService, touStatsService, alarmEvaluateService, collectionQualityRepository, null);
     }
 
     @Transactional
@@ -93,7 +97,7 @@ public class DataIngestService {
                 String deviceSn = meter == null ? null : meter.deviceSn();
                 Instant collectTime = meter == null ? (forward.receivedAt() == null ? Instant.now() : forward.receivedAt())
                         : resolveCollectTime(meter, payload, forward);
-                if (!ingestItemRepository.tryClaim(forward, deviceSn, collectTime)) {
+                if (!ingestItemRepository.tryClaim(forward, meter, collectTime)) {
                     continue;
                 }
                 try {
@@ -161,7 +165,11 @@ public class DataIngestService {
         realtimeCacheService.saveRealtime(snapshot(device, meter, collectTime, forward.receivedAt(), points, definitions));
         dailyStatsService.updateDaily(device, collectTime, points);
         hourlyStatsService.updateHourly(device, collectTime, points);
-        collectionQualityRepository.recordAcceptedMeter(device, collectTime);
+            collectionQualityRepository.recordAcceptedMeter(device, collectTime);
+            if (collectionWindowQualityRepository != null) {
+                collectionWindowQualityRepository.record(device, collectTime,
+                    effectiveSampleInterval(meter, payload), payload.reportWindowSeconds());
+        }
         touStatsService.updateTou(device, collectTime, points, definitions);
         alarmEvaluateService.evaluate(device, points, collectTime);
         return device;
@@ -200,6 +208,14 @@ public class DataIngestService {
             return forward.receivedAt();
         }
         return Instant.now();
+    }
+
+    private Integer effectiveSampleInterval(MeterPayload meter, GatewayUploadPayload payload) {
+        if (meter.sampleIntervalSeconds() != null && meter.sampleIntervalSeconds() > 0) {
+            return meter.sampleIntervalSeconds();
+        }
+        return payload.sampleIntervalSeconds() != null && payload.sampleIntervalSeconds() > 0
+                ? payload.sampleIntervalSeconds() : null;
     }
 
     private void validateQuality(MeterPayload meter, Instant collectTime, String messageId) {

@@ -11,6 +11,7 @@ import com.parkenergydata.entity.DevPointDefinition;
 import com.parkenergydata.entity.DevPointMapping;
 import com.parkenergydata.parser.JsonPointParser;
 import com.parkenergydata.repository.CollectionQualityRepository;
+import com.parkenergydata.repository.CollectionWindowQualityRepository;
 import com.parkenergydata.repository.DataIngestEventRepository;
 import com.parkenergydata.repository.DataIngestItemRepository;
 import com.parkenergydata.repository.DeviceRepository;
@@ -32,6 +33,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -51,16 +53,17 @@ class DataIngestServiceTests {
     @Mock private TouStatsService touStatsService;
     @Mock private AlarmEvaluateService alarmEvaluateService;
     @Mock private CollectionQualityRepository collectionQualityRepository;
+    @Mock private CollectionWindowQualityRepository collectionWindowQualityRepository;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
     private DataIngestService service;
 
     @BeforeEach
     void setUp() {
-        service = new DataIngestService(deviceRepository, ingestEventRepository, ingestItemRepository,
-                metadataService, new JsonPointParser(objectMapper), realtimeCacheService, timeSeriesWriter,
-                dailyStatsService, hourlyStatsService, touStatsService, alarmEvaluateService,
-                collectionQualityRepository);
+        service = new DataIngestService(new IngestDeviceCache(deviceRepository), new GatewayDeviceRateLimiter(120),
+                ingestEventRepository, ingestItemRepository, metadataService, new JsonPointParser(objectMapper),
+                realtimeCacheService, timeSeriesWriter, dailyStatsService, hourlyStatsService, touStatsService,
+                alarmEvaluateService, collectionQualityRepository, collectionWindowQualityRepository);
     }
 
     @Test
@@ -71,8 +74,8 @@ class DataIngestServiceTests {
         GatewayUploadPayload payload = mixedPayload(receivedAt.toEpochMilli());
         DevDevice newlyBound = device(102L, "METER-UNKNOWN");
         when(ingestEventRepository.tryClaim(replay)).thenReturn(true);
-        when(ingestItemRepository.tryClaim(eq(replay), eq("METER-KNOWN"), any())).thenReturn(false);
-        when(ingestItemRepository.tryClaim(eq(replay), eq("METER-UNKNOWN"), any())).thenReturn(true);
+        when(ingestItemRepository.tryClaim(eq(replay), argThat((MeterPayload meter) -> "METER-KNOWN".equals(meter.deviceSn())), any())).thenReturn(false);
+        when(ingestItemRepository.tryClaim(eq(replay), argThat((MeterPayload meter) -> "METER-UNKNOWN".equals(meter.deviceSn())), any())).thenReturn(true);
         when(deviceRepository.findEnabledByGatewayAndSn(3L, "METER-UNKNOWN")).thenReturn(Optional.of(newlyBound));
         stubVoltageMapping();
 
@@ -97,7 +100,7 @@ class DataIngestServiceTests {
                 "DATA_UPLOAD", "{}", receivedAt);
         GatewayUploadPayload payload = mixedPayload(receivedAt.toEpochMilli());
         when(ingestEventRepository.tryClaim(forward)).thenReturn(true);
-        when(ingestItemRepository.tryClaim(eq(forward), anyString(), any())).thenReturn(true);
+        when(ingestItemRepository.tryClaim(eq(forward), any(MeterPayload.class), any())).thenReturn(true);
         when(deviceRepository.findEnabledByGatewayAndSn(3L, "METER-KNOWN")).thenReturn(Optional.of(device(101L, "METER-KNOWN")));
         when(deviceRepository.findEnabledByGatewayAndSn(3L, "METER-UNKNOWN")).thenReturn(Optional.empty());
         stubVoltageMapping();
@@ -108,6 +111,26 @@ class DataIngestServiceTests {
         verify(ingestItemRepository).markSuccess(eq(forward), eq("METER-KNOWN"), any(), eq(101L));
         verify(ingestItemRepository).markInvalid(eq(forward), eq("METER-UNKNOWN"), any(), anyString());
         verify(ingestEventRepository).markSuccess(forward, 1);
+    }
+
+    @Test
+    void usesThePerSampleIntervalForCollectionWindowQuality() throws Exception {
+        Instant receivedAt = Instant.now();
+        AccessForwardMessage forward = new AccessForwardMessage(903L, "MSG-3-3", 3L, "GW-DEMO-003",
+                "DATA_UPLOAD", "{}", receivedAt);
+        MeterPayload meter = new MeterPayload("METER-KNOWN", 1, receivedAt.toEpochMilli(), 5, 0, null,
+                objectMapper.readTree("{\"voltage_a\":221.4}"), null);
+        GatewayUploadPayload payload = new GatewayUploadPayload("MSG-3-3", "GW-DEMO-003",
+                receivedAt.toEpochMilli(), "DATA_UPLOAD", 0, 300, List.of(meter), "1.0");
+        DevDevice known = device(101L, "METER-KNOWN");
+        when(ingestEventRepository.tryClaim(forward)).thenReturn(true);
+        when(ingestItemRepository.tryClaim(eq(forward), any(MeterPayload.class), any())).thenReturn(true);
+        when(deviceRepository.findEnabledByGatewayAndSn(3L, "METER-KNOWN")).thenReturn(Optional.of(known));
+        stubVoltageMapping();
+
+        service.ingest(forward, payload);
+
+        verify(collectionWindowQualityRepository).record(eq(known), any(), eq(5), eq(300));
     }
 
     private GatewayUploadPayload mixedPayload(long timestamp) throws Exception {
