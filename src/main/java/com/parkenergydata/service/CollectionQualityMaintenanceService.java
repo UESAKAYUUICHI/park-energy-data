@@ -39,9 +39,9 @@ public class CollectionQualityMaintenanceService {
                     ROUND(received_samples * 100.00 / GREATEST(1, VALUES(expected_samples)), 2)),
                   quality_status = CASE
                     WHEN quality_status = 'ABNORMAL' THEN 'ABNORMAL'
-                    WHEN received_samples * 100.00 / GREATEST(1, VALUES(expected_samples)) >=
+                    WHEN received_samples * 100.00 / GREATEST(1, VALUES(expected_samples)) >
                            COALESCE((SELECT quality_threshold_pct FROM dev_device
-                                     WHERE id = stats_collection_daily.device_id), 95.00)
+                                     WHERE id = stats_collection_daily.device_id), 80.00)
                          AND (last_collect_time IS NULL OR TIMESTAMPDIFF(SECOND, last_collect_time, NOW())
                               <= GREATEST(10, COALESCE((SELECT collect_interval_seconds FROM dev_device
                                                        WHERE id = stats_collection_daily.device_id), 300)) * 3)

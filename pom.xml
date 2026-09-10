@@ -82,6 +82,11 @@
         </dependency>
 
         <dependency>
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-mysql</artifactId>
+        </dependency>
+
+        <dependency>
             <groupId>org.apache.iotdb</groupId>
             <artifactId>iotdb-jdbc</artifactId>
             <version>${iotdb.version}</version>

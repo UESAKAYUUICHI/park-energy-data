@@ -68,6 +68,6 @@ public class CollectionQualityRepository {
     }
 
     private java.math.BigDecimal threshold(DevDevice device) {
-        return device.qualityThresholdPct() == null ? java.math.BigDecimal.valueOf(95) : device.qualityThresholdPct();
+        return device.qualityThresholdPct() == null ? java.math.BigDecimal.valueOf(80) : device.qualityThresholdPct();
     }
 }
