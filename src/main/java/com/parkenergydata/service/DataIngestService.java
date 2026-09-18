@@ -28,6 +28,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class DataIngestService {
+    private static final int QUALITY_NORMAL = 0;
+    private static final int QUALITY_ROLLBACK = 1;
     private final IngestDeviceCache deviceCache;
     private final GatewayDeviceRateLimiter rateLimiter;
     private final DataIngestEventRepository ingestEventRepository;
@@ -143,6 +145,7 @@ public class DataIngestService {
         }
         Instant collectTime = resolveCollectTime(meter, payload, forward);
         validateQuality(meter, collectTime, forward.messageId());
+        boolean rollback = meter.quality() != null && meter.quality() == QUALITY_ROLLBACK;
         DevDevice device = deviceCache.findEnabled(forward.gatewayId(), meter.deviceSn())
                 .orElseThrow(() -> new BusinessException("Device not found or disabled: " + meter.deviceSn()));
         Map<String, DevPointDefinition> definitions = metadataService.definitions(device.deviceTypeId());
@@ -161,15 +164,17 @@ public class DataIngestService {
         validatePointValues(meter.deviceSn(), points);
         timeSeriesWriter.writeDevicePoints(device.id(), collectTime, points);
         realtimeCacheService.saveRealtime(snapshot(device, meter, collectTime, forward.receivedAt(), points, definitions));
-        dailyStatsService.updateDaily(device, collectTime, points);
-        hourlyStatsService.updateHourly(device, collectTime, points);
+        if (!rollback) {
+            dailyStatsService.updateDaily(device, collectTime, points);
+            hourlyStatsService.updateHourly(device, collectTime, points);
             collectionQualityRepository.recordAcceptedMeter(device, collectTime);
             if (collectionWindowQualityRepository != null) {
                 collectionWindowQualityRepository.record(device, collectTime,
                     effectiveSampleInterval(meter, payload), payload.reportWindowSeconds());
+            }
+            touStatsService.updateTou(device, collectTime, points, definitions);
+            alarmEvaluateService.evaluate(device, points, collectTime);
         }
-        touStatsService.updateTou(device, collectTime, points, definitions);
-        alarmEvaluateService.evaluate(device, points, collectTime);
         return device;
     }
 
@@ -190,7 +195,9 @@ public class DataIngestService {
         long staleThreshold = Math.max(30L, (device.collectIntervalSeconds() == null ? 300L
                 : device.collectIntervalSeconds().longValue()) * 3L);
         String freshness = delaySeconds > staleThreshold ? "STALE" : "FRESH";
-        String quality = meter.quality() == null || meter.quality() == 0 ? "NORMAL" : "ABNORMAL";
+        String quality = meter.quality() == null || meter.quality() == QUALITY_NORMAL
+                ? "NORMAL"
+                : meter.quality() == QUALITY_ROLLBACK ? "ROLLBACK" : "ABNORMAL";
         return new RealtimeDeviceSnapshot(device.id(), device.deviceSn(), device.gatewayId(), device.orgId(),
                 collectTime, receiveTime, delaySeconds, freshness, quality, values, details, meter.quality());
     }
@@ -217,7 +224,9 @@ public class DataIngestService {
     }
 
     private void validateQuality(MeterPayload meter, Instant collectTime, String messageId) {
-        if (meter.quality() != null && meter.quality() != 0) {
+        if (meter.quality() != null
+                && meter.quality() != QUALITY_NORMAL
+                && meter.quality() != QUALITY_ROLLBACK) {
             throw new BusinessException("Meter quality is abnormal for " + meter.deviceSn() + ": " + meter.quality());
         }
         Instant now = Instant.now();
