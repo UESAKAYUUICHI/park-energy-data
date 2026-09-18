@@ -15,7 +15,6 @@ import com.parkenergydata.dto.RealtimeDeviceSnapshot;
 import com.parkenergydata.dto.RealtimePointValue;
 import com.parkenergydata.entity.DevDevice;
 import com.parkenergydata.entity.DevPointDefinition;
-import com.parkenergydata.entity.DevPointMapping;
 import com.parkenergydata.parser.JsonPointParser;
 import com.parkenergydata.repository.CollectionQualityRepository;
 import com.parkenergydata.repository.CollectionWindowQualityRepository;
@@ -147,13 +146,12 @@ public class DataIngestService {
         DevDevice device = deviceCache.findEnabled(forward.gatewayId(), meter.deviceSn())
                 .orElseThrow(() -> new BusinessException("Device not found or disabled: " + meter.deviceSn()));
         Map<String, DevPointDefinition> definitions = metadataService.definitions(device.deviceTypeId());
-        Map<String, DevPointMapping> mappings = metadataService.mappings(device.deviceTypeId());
-        if (definitions.isEmpty() || mappings.isEmpty()) {
-            throw new BusinessException("Point definition or mapping is empty for device type: " + device.deviceTypeId());
+        if (definitions.isEmpty()) {
+            throw new BusinessException("Point definition is empty for device type: " + device.deviceTypeId());
         }
         List<ParsedPoint> points;
         try {
-            points = pointParser.parse(meter, definitions, mappings);
+            points = pointParser.parse(meter, definitions);
         } catch (IllegalArgumentException ex) {
             throw new IllegalArgumentException("Device " + meter.deviceSn() + ": " + ex.getMessage(), ex);
         }
