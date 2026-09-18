@@ -32,7 +32,7 @@ public class DataParsePreviewService {
         DevDevice device = deviceRepository.findEnabledList(request.deviceId()).stream().findFirst()
                 .orElseThrow(() -> new BusinessException("设备不存在或未启用: " + request.deviceId()));
         List<PointParsePreview> points = pointParser.preview(request.meter(),
-                metadataService.definitions(device.deviceTypeId()), metadataService.mappings(device.deviceTypeId()));
+                metadataService.definitions(device.deviceTypeId()));
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("deviceId", device.id());
         result.put("deviceSn", device.deviceSn());

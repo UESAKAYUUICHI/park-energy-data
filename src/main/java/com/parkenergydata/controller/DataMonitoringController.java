@@ -44,22 +44,28 @@ public class DataMonitoringController {
     @GetMapping("/contracts/meter-points")
     public ApiResponse<Map<String, Object>> meterPointContract() {
         List<Map<String, Object>> rows = jdbc.queryForList("""
-                SELECT d.id AS device_type_id, d.type_code, p.point_code, p.source_path, p.required,
-                       EXISTS(SELECT 1 FROM dev_point_definition f
-                              WHERE f.device_type_id=p.device_type_id AND f.point_code=p.point_code AND f.enabled=1) AS definition_exists
-                FROM dev_point_mapping p JOIN dev_device_type d ON d.id=p.device_type_id
-                ORDER BY d.id,p.id
+                SELECT t.id AS device_type_id,t.type_code,t.protocol_type,p.point_code,p.enabled,
+                       b.id AS binding_id,f.field_code,f.document_address
+                FROM dev_point_definition p
+                JOIN dev_device_type t ON t.id=p.device_type_id
+                LEFT JOIN dev_device_model_version v ON v.device_type_id=t.id
+                LEFT JOIN dev_model_point_binding b ON b.model_version_id=v.id AND BINARY b.point_code=BINARY p.point_code
+                LEFT JOIN dev_protocol_field f ON f.id=b.protocol_field_id
+                WHERE p.enabled=1 AND t.enabled=1
+                ORDER BY t.id,p.sort,p.id
                 """);
         List<Map<String, Object>> issues = new java.util.ArrayList<>();
         for (Map<String, Object> row : rows) {
-            boolean definitionExists = truthy(row.get("definition_exists"));
-            if (!definitionExists) issues.add(issue(row, "POINT_DEFINITION_MISSING"));
+            String protocol = String.valueOf(row.get("protocol_type"));
+            if (protocol.startsWith("MODBUS") && row.get("binding_id") == null) {
+                issues.add(issue(row, "PROTOCOL_FIELD_BINDING_MISSING"));
+            }
         }
         Map<String, Object> result = new LinkedHashMap<>();
-        result.put("mappingCount", rows.size());
+        result.put("pointCount", rows.size());
         result.put("deviceTypeCount", rows.stream().map(row -> row.get("device_type_id")).distinct().count());
         result.put("valid", issues.isEmpty());
-        result.put("profileBinding", "每台网关电表在本地 UI 配置采集档案；新表型添加 profiles/*.toml 后选择对应 name 即可上报其声明测点");
+        result.put("profileBinding", "Modbus 产品测点必须绑定已发布协议字段；JSON 设备直接上报标准 points");
         result.put("issues", issues);
         return ApiResponse.ok(result);
     }
@@ -69,7 +75,8 @@ public class DataMonitoringController {
         issue.put("deviceTypeId", row.get("device_type_id"));
         issue.put("deviceTypeCode", row.get("type_code"));
         issue.put("pointCode", row.get("point_code"));
-        issue.put("sourcePath", row.get("source_path"));
+        issue.put("protocolField", row.get("field_code"));
+        issue.put("documentAddress", row.get("document_address"));
         issue.put("code", code);
         return issue;
     }
@@ -89,7 +96,4 @@ public class DataMonitoringController {
         catch (RuntimeException ex) { return false; }
     }
 
-    private boolean truthy(Object value) {
-        return Boolean.TRUE.equals(value) || "1".equals(String.valueOf(value)) || "true".equalsIgnoreCase(String.valueOf(value));
-    }
 }
