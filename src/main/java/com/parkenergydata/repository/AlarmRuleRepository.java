@@ -22,12 +22,18 @@ public interface AlarmRuleRepository {
               UNION ALL
               SELECT parent.id,parent.parent_id FROM dev_org parent JOIN org_ancestors child ON child.parent_id=parent.id
             )
-            SELECT r.id, v.id AS version_id, v.rule_name, v.alarm_type, v.rule_scope, v.org_id, v.space_id, v.device_id,
-                   v.point_code, v.compare_operator, v.threshold_value, v.threshold_min, v.threshold_max,
-                   v.duration_seconds, v.alarm_level, r.enabled, v.org_include_children, v.evaluation_mode,
+            SELECT r.id, v.id AS version_id,
+                   CONVERT(v.rule_name USING utf8mb4) COLLATE utf8mb4_unicode_ci AS rule_name,
+                   v.alarm_type, v.rule_scope, v.org_id, v.space_id, v.device_id,
+                   CONVERT(v.point_code USING utf8mb4) COLLATE utf8mb4_unicode_ci AS point_code,
+                   CONVERT(v.compare_operator USING utf8mb4) COLLATE utf8mb4_unicode_ci AS compare_operator,
+                   v.threshold_value, v.threshold_min, v.threshold_max,
+                   v.duration_seconds, v.alarm_level, r.enabled, v.org_include_children,
+                   CONVERT(v.evaluation_mode USING utf8mb4) COLLATE utf8mb4_unicode_ci AS evaluation_mode,
                    v.recovery_threshold_value, v.recovery_samples, v.freshness_seconds, v.max_sample_gap_seconds,
                    v.evaluation_window_samples, v.required_hits, v.window_seconds,
-                   NULL AS protocol_id, NULL AS protocol_point_id, NULL AS protocol_key
+                   NULL AS protocol_id, NULL AS protocol_point_id,
+                   CONVERT(NULL USING utf8mb4) COLLATE utf8mb4_unicode_ci AS protocol_key
             FROM alarm_rule r
             JOIN alarm_rule_version v ON v.id=COALESCE(
               (SELECT a.rule_version_id FROM log_alarm a
@@ -50,13 +56,19 @@ public interface AlarmRuleRepository {
               WHERE active_alarm.rule_id=r.id AND active_alarm.device_id=#{deviceId} AND active_alarm.active_fingerprint IS NOT NULL
             )
             UNION ALL
-            SELECT pp.id AS id, p.id AS version_id, pp.point_name AS rule_name, pp.alarm_type,
+            SELECT pp.id AS id, p.id AS version_id,
+                   CONVERT(pp.point_name USING utf8mb4) COLLATE utf8mb4_unicode_ci AS rule_name,
+                   pp.alarm_type,
                    3 AS rule_scope, d.org_id, d.space_id, d.id AS device_id,
-                   pp.point_code, pp.compare_operator, pp.threshold_value, pp.threshold_min, pp.threshold_max,
-                   pp.duration_seconds, pp.alarm_level, pp.enabled, 1 AS org_include_children, pp.evaluation_mode,
+                   CONVERT(pp.point_code USING utf8mb4) COLLATE utf8mb4_unicode_ci AS point_code,
+                   CONVERT(pp.compare_operator USING utf8mb4) COLLATE utf8mb4_unicode_ci AS compare_operator,
+                   pp.threshold_value, pp.threshold_min, pp.threshold_max,
+                   pp.duration_seconds, pp.alarm_level, pp.enabled, 1 AS org_include_children,
+                   CONVERT(pp.evaluation_mode USING utf8mb4) COLLATE utf8mb4_unicode_ci AS evaluation_mode,
                    pp.recovery_threshold_value, pp.recovery_samples, pp.freshness_seconds, pp.max_sample_gap_seconds,
                    pp.evaluation_window_samples, pp.required_hits, pp.window_seconds,
-                   p.id AS protocol_id, pp.id AS protocol_point_id, p.protocol_key
+                   p.id AS protocol_id, pp.id AS protocol_point_id,
+                   CONVERT(p.protocol_key USING utf8mb4) COLLATE utf8mb4_unicode_ci AS protocol_key
             FROM alarm_protocol_device pd
             JOIN alarm_protocol p ON p.id=pd.protocol_id
             JOIN alarm_protocol_point pp ON pp.protocol_id=p.id
