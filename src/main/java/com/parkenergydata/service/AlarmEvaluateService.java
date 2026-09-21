@@ -48,7 +48,7 @@ public class AlarmEvaluateService {
             }
             if (point == null || point.numericValue() == null || isStale(rule, collectTime)) continue;
 
-            Long activeId = repository.findActiveAlarmId(rule.id(), device.id());
+            Long activeId = repository.findAlarmId(rule, device.id());
             Instant persistedLastSample = activeId == null ? null : repository.findAlarmLastSampleTime(activeId);
             if (persistedLastSample != null && !collectTime.isAfter(persistedLastSample)) continue;
             if (!cacheService.acceptAlarmSample(device.id(), rule.id(), collectTime,
@@ -71,7 +71,7 @@ public class AlarmEvaluateService {
                 String previousStatus = activeId == null ? null : repository.findAlarmStatus(activeId);
                 repository.upsertAlarm(rule, device.id(), device.orgId(), evaluatedValue.toPlainString(),
                         thresholdText(rule), collectTime);
-                Long alarmId = repository.findActiveAlarmId(rule.id(), device.id());
+                Long alarmId = repository.findAlarmId(rule, device.id());
                 if (activeId == null && alarmId != null) {
                     repository.insertEventLog(alarmId, "TRIGGER", null, "NEW",
                             "测点 " + rule.pointCode() + " 触发规则，判定值 " + evaluatedValue.toPlainString());
@@ -92,7 +92,7 @@ public class AlarmEvaluateService {
 
     private void recoverIfStable(DevDevice device, AlarmRule rule, BigDecimal value, Instant collectTime) {
         cacheService.clearAlarmViolation(device.id(), rule.id());
-        Long alarmId = repository.findActiveAlarmId(rule.id(), device.id());
+        Long alarmId = repository.findAlarmId(rule, device.id());
         if (alarmId == null || value == null || !recoveryMatches(rule, value)) return;
         int required = Math.max(value(rule.recoverySamples(), 3), 1);
         if (!cacheService.alarmRecoverySamplesReached(device.id(), rule.id(), required)) return;
