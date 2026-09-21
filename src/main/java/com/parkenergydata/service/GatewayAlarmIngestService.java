@@ -34,9 +34,10 @@ public class GatewayAlarmIngestService {
         if ("RECOVERED".equals(payload.action())) {
             jdbcTemplate.update("""
                     UPDATE log_alarm SET event_status='RECOVERED',condition_status='CLEARED',recovery_time=?,
+                      alarm_value=COALESCE(?, alarm_value), threshold_value=COALESCE(?, threshold_value),
                       active_fingerprint=NULL,last_occurrence_time=?,version=version+1
                     WHERE alarm_source='GATEWAY' AND source_gateway_id=? AND source_event_id=?
-                    """, eventTime, eventTime, forward.gatewayId(), payload.eventId());
+                    """, eventTime, alarmValue(payload), thresholdValue(payload), eventTime, forward.gatewayId(), payload.eventId());
             return;
         }
         jdbcTemplate.update("""
@@ -47,11 +48,11 @@ public class GatewayAlarmIngestService {
                 VALUES ('GATEWAY',?,?,?,?,?,?,?,?,?,?,?,'NEW','ACTIVE',?,?,1,?,?,0)
                 ON DUPLICATE KEY UPDATE device_id=VALUES(device_id),org_id=VALUES(org_id),space_id=VALUES(space_id),
                   alarm_type=VALUES(alarm_type),alarm_level=VALUES(alarm_level),point_code=VALUES(point_code),
-                  alarm_value=VALUES(alarm_value),alarm_time=VALUES(alarm_time),event_status='NEW',
+                  alarm_value=VALUES(alarm_value),threshold_value=VALUES(threshold_value),alarm_time=VALUES(alarm_time),event_status='NEW',
                   condition_status='ACTIVE',active_fingerprint=VALUES(active_fingerprint),recovery_time=NULL,
                   last_occurrence_time=VALUES(last_occurrence_time),occurrence_count=occurrence_count+1,version=version+1
                 """, forward.gatewayId(), payload.eventId(), deviceId, orgId, spaceId, alarmType(payload.alarmType()),
-                level(payload.level()), payload.pointCode(), payload.message(), payload.action(), eventTime,
+                level(payload.level()), payload.pointCode(), alarmValue(payload), thresholdValue(payload), eventTime,
                 fingerprint, fingerprint, eventTime, eventTime);
     }
 
@@ -80,6 +81,15 @@ public class GatewayAlarmIngestService {
         if (type.contains("OFFLINE") || type.contains("CHANNEL")
                 || type.contains("COMMUNICATION") || type.contains("SERIAL")) return 4;
         return 5;
+    }
+
+    private String alarmValue(GatewayAlarmPayload payload) {
+        return payload.alarmValue() == null ? payload.message() : String.valueOf(payload.alarmValue());
+    }
+
+    private String thresholdValue(GatewayAlarmPayload payload) {
+        if (payload.thresholdValue() != null) return String.valueOf(payload.thresholdValue());
+        return payload.compareOperator() == null ? null : payload.compareOperator();
     }
 
     private Map<String, Object> one(String sql, Object... args) {
