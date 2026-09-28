@@ -1,27 +1,21 @@
 package com.parkenergydata.service;
 
 import java.time.Instant;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import com.parkenergydata.cache.RealtimeCacheService;
 import com.parkenergydata.common.BusinessException;
 import com.parkenergydata.dto.AccessForwardMessage;
 import com.parkenergydata.dto.GatewayUploadPayload;
 import com.parkenergydata.dto.MeterPayload;
 import com.parkenergydata.dto.ParsedPoint;
-import com.parkenergydata.dto.RealtimeDeviceSnapshot;
-import com.parkenergydata.dto.RealtimePointValue;
 import com.parkenergydata.entity.DevDevice;
 import com.parkenergydata.entity.DevPointDefinition;
 import com.parkenergydata.parser.JsonPointParser;
 import com.parkenergydata.repository.CollectionQualityRepository;
-import com.parkenergydata.repository.CollectionWindowQualityRepository;
 import com.parkenergydata.repository.DataIngestEventRepository;
 import com.parkenergydata.repository.DataIngestItemRepository;
 import com.parkenergydata.repository.DeviceRepository;
-import com.parkenergydata.timeseries.TimeSeriesWriter;
 import org.springframework.stereotype.Service;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.transaction.annotation.Transactional;
@@ -36,51 +30,33 @@ public class DataIngestService {
     private final DataIngestItemRepository ingestItemRepository;
     private final DeviceMetadataService metadataService;
     private final JsonPointParser pointParser;
-    private final RealtimeCacheService realtimeCacheService;
-    private final TimeSeriesWriter timeSeriesWriter;
-    private final DailyStatsService dailyStatsService;
-    private final HourlyStatsService hourlyStatsService;
-    private final CollectionQualityRepository collectionQualityRepository;
-    private final CollectionWindowQualityRepository collectionWindowQualityRepository;
-    private final TouStatsService touStatsService;
-    private final AlarmEvaluateService alarmEvaluateService;
+    private final MeterTelemetryService meterTelemetryService;
 
     @Autowired
     public DataIngestService(IngestDeviceCache deviceCache, GatewayDeviceRateLimiter rateLimiter, DataIngestEventRepository ingestEventRepository,
                              DataIngestItemRepository ingestItemRepository, DeviceMetadataService metadataService,
-                             JsonPointParser pointParser, RealtimeCacheService realtimeCacheService,
-                             TimeSeriesWriter timeSeriesWriter, DailyStatsService dailyStatsService,
-                             HourlyStatsService hourlyStatsService, TouStatsService touStatsService,
-                             AlarmEvaluateService alarmEvaluateService,
-                             CollectionQualityRepository collectionQualityRepository,
-                             CollectionWindowQualityRepository collectionWindowQualityRepository) {
+                             JsonPointParser pointParser, MeterTelemetryService meterTelemetryService) {
         this.deviceCache = deviceCache;
         this.rateLimiter = rateLimiter;
         this.ingestEventRepository = ingestEventRepository;
         this.ingestItemRepository = ingestItemRepository;
         this.metadataService = metadataService;
         this.pointParser = pointParser;
-        this.realtimeCacheService = realtimeCacheService;
-        this.timeSeriesWriter = timeSeriesWriter;
-        this.dailyStatsService = dailyStatsService;
-        this.hourlyStatsService = hourlyStatsService;
-        this.touStatsService = touStatsService;
-        this.alarmEvaluateService = alarmEvaluateService;
-        this.collectionQualityRepository = collectionQualityRepository;
-        this.collectionWindowQualityRepository = collectionWindowQualityRepository;
+        this.meterTelemetryService = meterTelemetryService;
     }
 
     /** Compatibility constructor retained for isolated unit tests and non-Spring callers. */
     public DataIngestService(DeviceRepository deviceRepository, DataIngestEventRepository ingestEventRepository,
                              DataIngestItemRepository ingestItemRepository, DeviceMetadataService metadataService,
-                             JsonPointParser pointParser, RealtimeCacheService realtimeCacheService,
-                             TimeSeriesWriter timeSeriesWriter, DailyStatsService dailyStatsService,
+                             JsonPointParser pointParser, com.parkenergydata.cache.RealtimeCacheService realtimeCacheService,
+                             com.parkenergydata.timeseries.TimeSeriesWriter timeSeriesWriter, DailyStatsService dailyStatsService,
                              HourlyStatsService hourlyStatsService, TouStatsService touStatsService,
                              AlarmEvaluateService alarmEvaluateService,
                              CollectionQualityRepository collectionQualityRepository) {
         this(new IngestDeviceCache(deviceRepository), new GatewayDeviceRateLimiter(120), ingestEventRepository,
-                ingestItemRepository, metadataService, pointParser, realtimeCacheService, timeSeriesWriter,
-                dailyStatsService, hourlyStatsService, touStatsService, alarmEvaluateService, collectionQualityRepository, null);
+                ingestItemRepository, metadataService, pointParser,
+                new MeterTelemetryService(realtimeCacheService, timeSeriesWriter, dailyStatsService, hourlyStatsService,
+                        collectionQualityRepository, null, touStatsService, alarmEvaluateService));
     }
 
     @Transactional
@@ -145,7 +121,6 @@ public class DataIngestService {
         }
         Instant collectTime = resolveCollectTime(meter, payload, forward);
         validateQuality(meter, collectTime, forward.messageId());
-        boolean rollback = meter.quality() != null && meter.quality() == QUALITY_ROLLBACK;
         DevDevice device = deviceCache.findEnabled(forward.gatewayId(), meter.deviceSn())
                 .orElseThrow(() -> new BusinessException("Device not found or disabled: " + meter.deviceSn()));
         Map<String, DevPointDefinition> definitions = metadataService.definitions(device.deviceTypeId());
@@ -162,44 +137,8 @@ public class DataIngestService {
             throw new BusinessException("No parsed points for device: " + meter.deviceSn());
         }
         validatePointValues(meter.deviceSn(), points);
-        timeSeriesWriter.writeDevicePoints(device.id(), collectTime, points);
-        realtimeCacheService.saveRealtime(snapshot(device, meter, collectTime, forward.receivedAt(), points, definitions));
-        if (!rollback) {
-            dailyStatsService.updateDaily(device, collectTime, points);
-            hourlyStatsService.updateHourly(device, collectTime, points);
-            collectionQualityRepository.recordAcceptedMeter(device, collectTime);
-            if (collectionWindowQualityRepository != null) {
-                collectionWindowQualityRepository.record(device, collectTime,
-                    effectiveSampleInterval(meter, payload), payload.reportWindowSeconds());
-            }
-            touStatsService.updateTou(device, collectTime, points, definitions);
-            alarmEvaluateService.evaluate(device, points, collectTime);
-        }
+        meterTelemetryService.persist(forward, payload, meter, device, collectTime, points, definitions);
         return device;
-    }
-
-    private RealtimeDeviceSnapshot snapshot(DevDevice device, MeterPayload meter, Instant collectTime,
-                                            Instant receivedAt, List<ParsedPoint> points,
-                                            Map<String, DevPointDefinition> definitions) {
-        Map<String, Object> values = new LinkedHashMap<>();
-        List<RealtimePointValue> details = new java.util.ArrayList<>();
-        for (ParsedPoint point : points) {
-            values.put(point.pointCode(), point.value());
-            DevPointDefinition definition = definitions.get(point.pointCode());
-            details.add(new RealtimePointValue(point.pointCode(),
-                    definition == null ? point.pointCode() : definition.pointName(), point.value(),
-                    definition == null ? null : definition.unit(), point.businessRole(), "GOOD"));
-        }
-        Instant receiveTime = receivedAt == null ? Instant.now() : receivedAt;
-        long delaySeconds = Math.max(0L, java.time.Duration.between(collectTime, receiveTime).getSeconds());
-        long staleThreshold = Math.max(30L, (device.collectIntervalSeconds() == null ? 300L
-                : device.collectIntervalSeconds().longValue()) * 3L);
-        String freshness = delaySeconds > staleThreshold ? "STALE" : "FRESH";
-        String quality = meter.quality() == null || meter.quality() == QUALITY_NORMAL
-                ? "NORMAL"
-                : meter.quality() == QUALITY_ROLLBACK ? "ROLLBACK" : "ABNORMAL";
-        return new RealtimeDeviceSnapshot(device.id(), device.deviceSn(), device.gatewayId(), device.orgId(),
-                collectTime, receiveTime, delaySeconds, freshness, quality, values, details, meter.quality());
     }
 
     private Instant resolveCollectTime(MeterPayload meter, GatewayUploadPayload payload, AccessForwardMessage forward) {
@@ -213,14 +152,6 @@ public class DataIngestService {
             return forward.receivedAt();
         }
         return Instant.now();
-    }
-
-    private Integer effectiveSampleInterval(MeterPayload meter, GatewayUploadPayload payload) {
-        if (meter.sampleIntervalSeconds() != null && meter.sampleIntervalSeconds() > 0) {
-            return meter.sampleIntervalSeconds();
-        }
-        return payload.sampleIntervalSeconds() != null && payload.sampleIntervalSeconds() > 0
-                ? payload.sampleIntervalSeconds() : null;
     }
 
     private void validateQuality(MeterPayload meter, Instant collectTime, String messageId) {
