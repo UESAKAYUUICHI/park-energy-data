@@ -1,4 +1,6 @@
 package com.parkenergydata.consumer;
+import com.parkenergydata.service.ingest.GatewayAlarmIngestService;
+import com.parkenergydata.service.ingest.DataIngestService;
 
 import java.nio.charset.StandardCharsets;
 
@@ -9,8 +11,6 @@ import com.parkenergydata.dto.GatewayUploadPayload;
 import com.parkenergydata.dto.GatewayAlarmPayload;
 import com.parkenergydata.mq.AlarmReceiptPublisher;
 import com.parkenergydata.parser.PayloadParser;
-import com.parkenergydata.service.DataIngestService;
-import com.parkenergydata.service.GatewayAlarmIngestService;
 import com.rabbitmq.client.Channel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

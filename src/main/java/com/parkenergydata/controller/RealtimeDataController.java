@@ -1,4 +1,5 @@
 package com.parkenergydata.controller;
+import com.parkenergydata.service.query.RealtimeDataService;
 
 import java.util.Arrays;
 import java.util.List;
@@ -6,7 +7,6 @@ import java.util.Map;
 
 import com.parkenergydata.common.ApiResponse;
 import com.parkenergydata.dto.RealtimeDeviceSnapshot;
-import com.parkenergydata.service.RealtimeDataService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestParam;

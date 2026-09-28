@@ -1,13 +1,13 @@
 package com.parkenergydata.controller;
+import com.parkenergydata.service.stats.TouStatsService;
+import com.parkenergydata.service.stats.HourlyStatsService;
+import com.parkenergydata.service.stats.DailyStatsService;
 
 import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
 
 import com.parkenergydata.common.ApiResponse;
-import com.parkenergydata.service.DailyStatsService;
-import com.parkenergydata.service.HourlyStatsService;
-import com.parkenergydata.service.TouStatsService;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;

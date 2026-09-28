@@ -1,0 +1,206 @@
+package com.parkenergydata.service.ingest;
+import com.parkenergydata.service.stats.TouStatsService;
+import com.parkenergydata.service.stats.MeterTelemetryService;
+import com.parkenergydata.service.stats.HourlyStatsService;
+import com.parkenergydata.service.stats.DailyStatsService;
+import com.parkenergydata.service.alarm.AlarmEvaluateService;
+
+import java.time.Instant;
+import java.util.List;
+import java.util.Map;
+
+import com.parkenergydata.common.BusinessException;
+import com.parkenergydata.dto.AccessForwardMessage;
+import com.parkenergydata.dto.GatewayUploadPayload;
+import com.parkenergydata.dto.MeterPayload;
+import com.parkenergydata.dto.ParsedPoint;
+import com.parkenergydata.entity.DevDevice;
+import com.parkenergydata.entity.DevPointDefinition;
+import com.parkenergydata.parser.JsonPointParser;
+import com.parkenergydata.repository.stats.CollectionQualityRepository;
+import com.parkenergydata.repository.ingest.DataIngestEventRepository;
+import com.parkenergydata.repository.ingest.DataIngestItemRepository;
+import com.parkenergydata.repository.ingest.DeviceRepository;
+import org.springframework.stereotype.Service;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.transaction.annotation.Transactional;
+
+@Service
+public class DataIngestService {
+    private static final int QUALITY_NORMAL = 0;
+    private static final int QUALITY_ROLLBACK = 1;
+    private final IngestDeviceCache deviceCache;
+    private final GatewayDeviceRateLimiter rateLimiter;
+    private final DataIngestEventRepository ingestEventRepository;
+    private final DataIngestItemRepository ingestItemRepository;
+    private final DeviceMetadataService metadataService;
+    private final JsonPointParser pointParser;
+    private final MeterTelemetryService meterTelemetryService;
+
+    @Autowired
+    public DataIngestService(IngestDeviceCache deviceCache, GatewayDeviceRateLimiter rateLimiter, DataIngestEventRepository ingestEventRepository,
+                             DataIngestItemRepository ingestItemRepository, DeviceMetadataService metadataService,
+                             JsonPointParser pointParser, MeterTelemetryService meterTelemetryService) {
+        this.deviceCache = deviceCache;
+        this.rateLimiter = rateLimiter;
+        this.ingestEventRepository = ingestEventRepository;
+        this.ingestItemRepository = ingestItemRepository;
+        this.metadataService = metadataService;
+        this.pointParser = pointParser;
+        this.meterTelemetryService = meterTelemetryService;
+    }
+
+    /** Compatibility constructor retained for isolated unit tests and non-Spring callers. */
+    public DataIngestService(DeviceRepository deviceRepository, DataIngestEventRepository ingestEventRepository,
+                             DataIngestItemRepository ingestItemRepository, DeviceMetadataService metadataService,
+                             JsonPointParser pointParser, com.parkenergydata.cache.RealtimeCacheService realtimeCacheService,
+                             com.parkenergydata.timeseries.TimeSeriesWriter timeSeriesWriter, DailyStatsService dailyStatsService,
+                             HourlyStatsService hourlyStatsService, TouStatsService touStatsService,
+                             AlarmEvaluateService alarmEvaluateService,
+                             CollectionQualityRepository collectionQualityRepository) {
+        this(new IngestDeviceCache(deviceRepository), new GatewayDeviceRateLimiter(120), ingestEventRepository,
+                ingestItemRepository, metadataService, pointParser,
+                new MeterTelemetryService(realtimeCacheService, timeSeriesWriter, dailyStatsService, hourlyStatsService,
+                        collectionQualityRepository, null, touStatsService, alarmEvaluateService));
+    }
+
+    @Transactional
+    public void ingest(AccessForwardMessage forward, GatewayUploadPayload payload) {
+        if (!ingestEventRepository.tryClaim(forward)) {
+            return;
+        }
+        try {
+            if (payload.meters() == null || payload.meters().isEmpty()) {
+                throw new BusinessException("No meters in payload: " + forward.messageId());
+            }
+            int acceptedCount = 0;
+            java.util.List<String> failedMeters = new java.util.ArrayList<>();
+            for (MeterPayload meter : payload.meters()) {
+                String deviceSn = meter == null ? null : meter.deviceSn();
+                Instant collectTime = meter == null ? (forward.receivedAt() == null ? Instant.now() : forward.receivedAt())
+                        : resolveCollectTime(meter, payload, forward);
+                if (!ingestItemRepository.tryClaim(forward, meter, collectTime)) {
+                    continue;
+                }
+                try {
+                    if (deviceSn == null || !rateLimiter.tryAcquire(forward.gatewayId(), deviceSn)) {
+                        throw new BusinessException("Device report rate exceeded; replay this item later: " + deviceSn);
+                    }
+                    DevDevice device = processMeter(forward, payload, meter);
+                    ingestItemRepository.markSuccess(forward, deviceSn, collectTime, device.id());
+                    acceptedCount++;
+                } catch (RuntimeException exception) {
+                    ingestItemRepository.markInvalid(forward, deviceSn, collectTime, exception.getMessage());
+                    failedMeters.add(deviceSn == null ? "<missing SN>" : deviceSn);
+                }
+            }
+            if (acceptedCount == 0) {
+                ingestEventRepository.markInvalid(forward,
+                        "No device samples were accepted: " + String.join(", ", failedMeters));
+                return;
+            }
+            ingestEventRepository.markSuccess(forward, acceptedCount);
+        } catch (RuntimeException exception) {
+            throw exception;
+        }
+    }
+
+    @Transactional
+    public void recordInvalid(AccessForwardMessage forward, String reason) {
+        ingestEventRepository.markInvalid(forward, reason);
+    }
+
+    @Transactional
+    public void recordDeadLetter(AccessForwardMessage forward, String reason) {
+        ingestEventRepository.markDeadLetter(forward, reason);
+    }
+
+    @Transactional
+    public boolean requestReplay(long eventId) {
+        return ingestEventRepository.requestReplay(eventId);
+    }
+
+    private DevDevice processMeter(AccessForwardMessage forward, GatewayUploadPayload payload, MeterPayload meter) {
+        if (meter.deviceSn() == null || meter.deviceSn().isBlank()) {
+            throw new BusinessException("Meter deviceSn is missing: " + forward.messageId());
+        }
+        Instant collectTime = resolveCollectTime(meter, payload, forward);
+        validateQuality(meter, collectTime, forward.messageId());
+        DevDevice device = deviceCache.findEnabled(forward.gatewayId(), meter.deviceSn())
+                .orElseThrow(() -> new BusinessException("Device not found or disabled: " + meter.deviceSn()));
+        Map<String, DevPointDefinition> definitions = metadataService.definitions(device.deviceTypeId());
+        if (definitions.isEmpty()) {
+            throw new BusinessException("Point definition is empty for device type: " + device.deviceTypeId());
+        }
+        List<ParsedPoint> points;
+        try {
+            points = pointParser.parse(meter, definitions);
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalArgumentException("Device " + meter.deviceSn() + ": " + ex.getMessage(), ex);
+        }
+        if (points.isEmpty()) {
+            throw new BusinessException("No parsed points for device: " + meter.deviceSn());
+        }
+        validatePointValues(meter.deviceSn(), points);
+        meterTelemetryService.persist(forward, payload, meter, device, collectTime, points, definitions);
+        return device;
+    }
+
+    private Instant resolveCollectTime(MeterPayload meter, GatewayUploadPayload payload, AccessForwardMessage forward) {
+        if (meter.collectTime() != null) {
+            return Instant.ofEpochMilli(meter.collectTime());
+        }
+        if (payload.timestamp() != null) {
+            return Instant.ofEpochMilli(payload.timestamp());
+        }
+        if (forward.receivedAt() != null) {
+            return forward.receivedAt();
+        }
+        return Instant.now();
+    }
+
+    private void validateQuality(MeterPayload meter, Instant collectTime, String messageId) {
+        if (meter.quality() != null
+                && meter.quality() != QUALITY_NORMAL
+                && meter.quality() != QUALITY_ROLLBACK) {
+            throw new BusinessException("Meter quality is abnormal for " + meter.deviceSn() + ": " + meter.quality());
+        }
+        Instant now = Instant.now();
+        if (collectTime.isAfter(now.plusSeconds(10 * 60L))) {
+            throw new BusinessException("Collect time is too far in future for " + meter.deviceSn() + ": " + messageId);
+        }
+        if (collectTime.isBefore(now.minusSeconds(90L * 24 * 3600))) {
+            throw new BusinessException("Collect time is older than 90 days for " + meter.deviceSn() + ": " + messageId);
+        }
+    }
+
+    private void validatePointValues(String deviceSn, List<ParsedPoint> points) {
+        for (ParsedPoint point : points) {
+            if (point.numericValue() == null) {
+                continue;
+            }
+            java.math.BigDecimal min = null;
+            java.math.BigDecimal max = null;
+            if (point.pointCode().startsWith("VOLTAGE_")) {
+                min = java.math.BigDecimal.ZERO;
+                max = java.math.BigDecimal.valueOf(500);
+            } else if (point.pointCode().startsWith("CURRENT_")) {
+                min = java.math.BigDecimal.ZERO;
+                max = java.math.BigDecimal.valueOf(10000);
+            } else if ("POWER_FACTOR_TOTAL".equals(point.pointCode())) {
+                min = java.math.BigDecimal.valueOf(-1);
+                max = java.math.BigDecimal.ONE;
+            } else if ("FREQUENCY".equals(point.pointCode())) {
+                min = java.math.BigDecimal.valueOf(45);
+                max = java.math.BigDecimal.valueOf(55);
+            } else if ("FORWARD_ACTIVE_ENERGY".equals(point.pointCode())) {
+                min = java.math.BigDecimal.ZERO;
+            }
+            if ((min != null && point.numericValue().compareTo(min) < 0)
+                    || (max != null && point.numericValue().compareTo(max) > 0)) {
+                throw new BusinessException("Point value is out of range for " + deviceSn + ": "
+                        + point.pointCode() + "=" + point.numericValue());
+            }
+        }
+    }
+}
