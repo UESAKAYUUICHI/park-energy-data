@@ -244,4 +244,13 @@ public interface AlarmRuleRepository {
                                          @Param("dealStatus") Integer dealStatus,
                                          @Param("startTime") String startTime,
                                          @Param("endTime") String endTime);
+
+    @Select("""
+            SELECT s.work_start_time, s.work_end_time, s.base_load_kw, s.overtime_active,
+                   COALESCE((SELECT w.data_complete_rate FROM stats_collection_window w
+                             WHERE w.device_id = d.id ORDER BY w.window_end DESC LIMIT 1), 100.00) AS complete_rate
+            FROM dev_device d LEFT JOIN park_space s ON s.id = d.space_id
+            WHERE d.id = #{deviceId} LIMIT 1
+            """)
+    Map<String, Object> findDeviceSpaceConstraint(@Param("deviceId") Long deviceId);
 }

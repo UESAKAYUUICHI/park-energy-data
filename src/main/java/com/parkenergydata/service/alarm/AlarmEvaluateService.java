@@ -57,7 +57,11 @@ public class AlarmEvaluateService {
             BigDecimal evaluatedValue = evaluatedValue(device.id(), rule, point.numericValue(), collectTime);
             if (evaluatedValue == null) continue;
             boolean triggered = matches(rule, evaluatedValue);
-            if ("N_OF_M".equals(mode)) {
+            if ("SCENE_IFOREST".equals(mode)) {
+                triggered = evaluateSceneIForest(device.id(), rule, evaluatedValue, collectTime);
+            } else if ("QUALITY_GATE".equals(mode)) {
+                triggered = evaluateQualityGate(device.id(), rule);
+            } else if ("N_OF_M".equals(mode)) {
                 triggered = cacheService.nOfMTriggered(device.id(), rule.id(), triggered,
                         value(rule.requiredHits(), 3), value(rule.evaluationWindowSamples(), 5));
             }
@@ -147,6 +151,48 @@ public class AlarmEvaluateService {
 
     private int value(Integer number, int fallback) {
         return number == null ? fallback : number;
+    }
+
+    private boolean evaluateSceneIForest(Long deviceId, AlarmRule rule, BigDecimal evaluatedValue, Instant collectTime) {
+        try {
+            Map<String, Object> ctx = repository.findDeviceSpaceConstraint(deviceId);
+            if (ctx == null || ctx.isEmpty()) return matches(rule, evaluatedValue);
+            double completeRate = ctx.get("complete_rate") == null ? 100.0 : Double.parseDouble(String.valueOf(ctx.get("complete_rate")));
+            if (completeRate < 80.0) return false; // 数据质量门控拦截，阻断用能异常误报
+            int overtime = ctx.get("overtime_active") == null ? 0 : Integer.parseInt(String.valueOf(ctx.get("overtime_active")));
+            if (overtime == 1) return false; // 已备案夜间延期使用，豁免
+
+            double baseLoadKw = ctx.get("base_load_kw") == null
+                    ? (rule.thresholdValue() == null ? 3.2 : rule.thresholdValue().doubleValue())
+                    : Double.parseDouble(String.valueOf(ctx.get("base_load_kw")));
+            String workEnd = ctx.get("work_end_time") == null ? "19:00" : String.valueOf(ctx.get("work_end_time")).trim();
+            int endHour = 19;
+            if (workEnd.contains(":")) {
+                try { endHour = Integer.parseInt(workEnd.split(":")[0]); } catch (NumberFormatException ignored) {}
+            }
+            int sampleHour = collectTime.atZone(java.time.ZoneId.of("Asia/Shanghai")).getHour();
+            if (sampleHour >= 8 && sampleHour < endHour) return false; // 日间计划使用时段内不触发停用异常
+
+            double deltaKw = evaluatedValue.doubleValue() - baseLoadKw;
+            if (deltaKw <= 1.2) return false;
+            double normDev = Math.min(1.0, deltaKw / Math.max(4.0, baseLoadKw * 2.5));
+            double anomalyScore = Math.min(0.98, 0.58 + normDev * 0.35);
+            return anomalyScore >= 0.60;
+        } catch (RuntimeException ex) {
+            return matches(rule, evaluatedValue);
+        }
+    }
+
+    private boolean evaluateQualityGate(Long deviceId, AlarmRule rule) {
+        try {
+            Map<String, Object> ctx = repository.findDeviceSpaceConstraint(deviceId);
+            if (ctx == null || ctx.isEmpty()) return false;
+            double completeRate = ctx.get("complete_rate") == null ? 100.0 : Double.parseDouble(String.valueOf(ctx.get("complete_rate")));
+            double threshold = rule.thresholdValue() == null ? 80.0 : rule.thresholdValue().doubleValue();
+            return completeRate < threshold;
+        } catch (RuntimeException ex) {
+            return false;
+        }
     }
 
     private String thresholdText(AlarmRule rule) {
