@@ -1,16 +1,18 @@
 server:
+  address: ${SERVER_ADDRESS:127.0.0.1}
   port: 8202
 
 spring:
   flyway:
+    table: flyway_data_history
     baseline-on-migrate: true
-    baseline-version: 0
+    baseline-version: 2
   application:
     name: park-energy-data
   datasource:
     url: jdbc:mysql://115.159.222.238:3306/park_energy_system?useUnicode=true&characterEncoding=utf8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
     username: admin
-    password: Saki#Mygo06
+    password: ${PARK_DB_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
       pool-name: ParkDataPool
@@ -27,10 +29,14 @@ spring:
         socketTimeout: ${DB_SOCKET_TIMEOUT_MS:30000}
         tcpKeepAlive: true
   rabbitmq:
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
     host: 115.159.222.238
     port: 5672
     username: admin
-    password: Saki#Mygo06
+    password: ${PARK_RABBITMQ_PASSWORD}
     listener:
       simple:
         acknowledge-mode: manual
@@ -41,7 +47,7 @@ spring:
     redis:
       host: 115.159.222.238
       port: 6379
-      password: ""
+      password: ${PARK_REDIS_PASSWORD}
       timeout: 3s
 
 park:
@@ -60,7 +66,7 @@ park:
       driver-class-name: org.apache.iotdb.jdbc.IoTDBDriver
       jdbc-url: jdbc:iotdb://115.159.222.238:6667/
       username: root
-      password: root
+      password: ${PARK_IOTDB_PASSWORD}
       storage-group: root.park_energy.device
 
 mybatis-plus:

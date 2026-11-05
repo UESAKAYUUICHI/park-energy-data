@@ -16,7 +16,12 @@ import java.util.Map;
 public class GatewayAlarmIngestService {
     private final JdbcTemplate jdbcTemplate;
 
-    public GatewayAlarmIngestService(JdbcTemplate jdbcTemplate) { this.jdbcTemplate = jdbcTemplate; }
+    private final com.parkenergydata.service.alarm.EdgeAlarmObservationService observations;
+    public GatewayAlarmIngestService(JdbcTemplate jdbcTemplate,
+            com.parkenergydata.service.alarm.EdgeAlarmObservationService observations) {
+        this.jdbcTemplate = jdbcTemplate;
+        this.observations = observations;
+    }
 
     @Transactional
     public void ingest(AccessForwardMessage forward, GatewayAlarmPayload payload) {
@@ -26,6 +31,7 @@ public class GatewayAlarmIngestService {
                 "SELECT id,org_id,space_id FROM dev_device WHERE gateway_id=? AND device_sn=? LIMIT 1",
                 forward.gatewayId(), payload.deviceSn());
         Long deviceId = device == null ? null : number(device.get("id"));
+        if (observations.recordProtocolObservation(forward, payload, deviceId)) return;
         Object orgId = device == null ? gateway.get("org_id") : device.get("org_id");
         Object spaceId = device == null ? null : device.get("space_id");
         String fingerprint = "GATEWAY:" + forward.gatewayId() + ":" + payload.eventId();

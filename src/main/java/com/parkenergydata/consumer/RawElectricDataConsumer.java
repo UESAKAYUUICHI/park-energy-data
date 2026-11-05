@@ -17,7 +17,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.amqp.core.Message;
 import org.springframework.amqp.core.MessageProperties;
 import org.springframework.amqp.rabbit.annotation.RabbitListener;
-import org.springframework.amqp.rabbit.core.RabbitTemplate;
+import com.parkenergydata.mq.ConfirmedMessagePublisher;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -26,13 +26,13 @@ public class RawElectricDataConsumer {
 
     private final PayloadParser payloadParser;
     private final DataIngestService dataIngestService;
-    private final RabbitTemplate rabbitTemplate;
+    private final ConfirmedMessagePublisher rabbitTemplate;
     private final ParkRabbitProperties rabbitProperties;
     private final GatewayAlarmIngestService gatewayAlarmIngestService;
     private final AlarmReceiptPublisher alarmReceiptPublisher;
 
     public RawElectricDataConsumer(PayloadParser payloadParser, DataIngestService dataIngestService,
-                                   RabbitTemplate rabbitTemplate, ParkRabbitProperties rabbitProperties,
+                                   ConfirmedMessagePublisher rabbitTemplate, ParkRabbitProperties rabbitProperties,
                                    GatewayAlarmIngestService gatewayAlarmIngestService,
                                    AlarmReceiptPublisher alarmReceiptPublisher) {
         this.payloadParser = payloadParser;
@@ -62,21 +62,23 @@ public class RawElectricDataConsumer {
         } catch (BusinessException | IllegalArgumentException ex) {
             log.warn("Discard invalid raw electric data message: {}", ex.getMessage());
             try {
-                AccessForwardMessage forward = payloadParser.parseForwardMessage(body);
-                if ("ALARM_UPLOAD".equals(forward.payloadType())) {
-                    GatewayAlarmPayload alarm = payloadParser.parseGatewayAlarmPayload(forward.rawPayload());
-                    alarmReceiptPublisher.publish(forward, alarm, "DATA_FAILED", ex.getMessage());
-                } else {
-                    dataIngestService.recordInvalid(forward, ex.getMessage());
-                }
-            } catch (Exception recordException) {
-                log.error("Unable to persist invalid ingest event", recordException);
+                boolean alarmQueue=rabbitProperties.alarmQueue().equals(message.getMessageProperties().getConsumerQueue());
+                route(message,alarmQueue ? rabbitProperties.alarmDeadLetterRoutingKey()
+                        : rabbitProperties.deadLetterRoutingKey(),retryCount(message),ex.getMessage());
+                AccessForwardMessage forward=null;
+                try { forward=payloadParser.parseForwardMessage(body); }
+                catch(BusinessException | IllegalArgumentException malformed) { }
+                if(forward!=null) dataIngestService.recordInvalid(forward,ex.getMessage());
+                channel.basicAck(deliveryTag,false);
+            } catch(Exception recordException) {
+                log.error("Invalid message not durably recorded",recordException);
+                channel.basicNack(deliveryTag,false,true);
             }
-            channel.basicAck(deliveryTag, false);
         } catch (Exception ex) {
             int retryCount = retryCount(message) + 1;
             boolean alarmQueue = rabbitProperties.alarmQueue()
                     .equals(message.getMessageProperties().getConsumerQueue());
+            try {
             if (retryCount > rabbitProperties.maxRetryAttempts()) {
                 route(message, alarmQueue ? rabbitProperties.alarmDeadLetterRoutingKey()
                         : rabbitProperties.deadLetterRoutingKey(), retryCount, ex.getMessage());
@@ -87,6 +89,11 @@ public class RawElectricDataConsumer {
                         : rabbitProperties.retryRoutingKey(), retryCount, ex.getMessage());
                 log.warn("Recoverable raw electric data failure; scheduled retry {}/{}: {}", retryCount,
                         rabbitProperties.maxRetryAttempts(), ex.getMessage());
+            }
+            } catch (RuntimeException publishFailure) {
+                log.error("Retry route not confirmed; retaining original delivery",publishFailure);
+                channel.basicNack(deliveryTag,false,true);
+                return;
             }
             channel.basicAck(deliveryTag, false);
         }

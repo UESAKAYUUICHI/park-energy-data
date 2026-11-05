@@ -36,28 +36,11 @@ public class DataIngestItemRepository {
                 SET status = 'PROCESSING', processed_at = NULL, error_code = NULL, error_reason = NULL,
                     retry_count = retry_count + 1, channel_id = ?, modbus_addr = ?, profile_key = ?,
                     model_version = ?, config_revision = ?
-                WHERE raw_log_id = ? AND device_sn = ?
+                WHERE raw_log_id = ? AND device_sn = ? AND collect_time = ?
                   AND status IN ('INVALID', 'DEAD_LETTER', 'REPLAY_REQUESTED')
                 """, blankToNull(meter.channelId()), meter.modbusAddr(), blankToNull(meter.profileKey()),
                 blankToNull(meter.modelVersion()), blankToNull(meter.configRevision()), forward.rawLogId(),
-                deviceSn) == 1;
-    }
-
-    /** Compatibility overload for older unit tests and replayers. */
-    public boolean tryClaim(AccessForwardMessage forward, String deviceSn, Instant collectTime) {
-        if (forward.rawLogId() <= 0 || deviceSn == null || deviceSn.isBlank()) return true;
-        int inserted = jdbcTemplate.update("""
-                INSERT IGNORE INTO data_ingest_item
-                  (raw_log_id, gateway_id, device_sn, collect_time, status, received_at)
-                VALUES (?, ?, ?, ?, 'PROCESSING', ?)
-                """, forward.rawLogId(), forward.gatewayId(), deviceSn, timestamp(collectTime), timestamp(forward.receivedAt()));
-        if (inserted == 1) return true;
-        return jdbcTemplate.update("""
-                UPDATE data_ingest_item
-                SET status = 'PROCESSING', processed_at = NULL, error_code = NULL, error_reason = NULL, retry_count = retry_count + 1
-                WHERE raw_log_id = ? AND device_sn = ?
-                  AND status IN ('INVALID', 'DEAD_LETTER', 'REPLAY_REQUESTED')
-                """, forward.rawLogId(), deviceSn) == 1;
+                deviceSn, timestamp(collectTime)) == 1;
     }
 
     public void markSuccess(AccessForwardMessage forward, String deviceSn, Instant collectTime, Long deviceId) {
@@ -65,8 +48,8 @@ public class DataIngestItemRepository {
         jdbcTemplate.update("""
                 UPDATE data_ingest_item
                 SET status = 'SUCCESS', device_id = ?, processed_at = CURRENT_TIMESTAMP, error_code = NULL, error_reason = NULL
-                WHERE raw_log_id = ? AND device_sn = ? AND status = 'PROCESSING'
-                """, deviceId, forward.rawLogId(), deviceSn);
+                WHERE raw_log_id = ? AND device_sn = ? AND collect_time = ? AND status = 'PROCESSING'
+                """, deviceId, forward.rawLogId(), deviceSn, timestamp(collectTime));
     }
 
     public void markInvalid(AccessForwardMessage forward, String deviceSn, Instant collectTime, String reason) {
@@ -74,8 +57,8 @@ public class DataIngestItemRepository {
         jdbcTemplate.update("""
                 UPDATE data_ingest_item
                 SET status = 'INVALID', processed_at = CURRENT_TIMESTAMP, error_code = ?, error_reason = ?
-                WHERE raw_log_id = ? AND device_sn = ? AND status = 'PROCESSING'
-                """, failureCode(reason), shortReason(reason), forward.rawLogId(), deviceSn);
+                WHERE raw_log_id = ? AND device_sn = ? AND collect_time = ? AND status = 'PROCESSING'
+                """, failureCode(reason), shortReason(reason), forward.rawLogId(), deviceSn, timestamp(collectTime));
     }
 
     private Timestamp timestamp(Instant value) {

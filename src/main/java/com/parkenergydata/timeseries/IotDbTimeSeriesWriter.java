@@ -104,7 +104,7 @@ public class IotDbTimeSeriesWriter implements TimeSeriesWriter {
             return;
         }
         if (!storageGroupExists(statement)) {
-            statement.execute("CREATE DATABASE " + databasePath());
+            statement.execute("CREATE DATABASE " + databasePath() + " WITH DATA_REGION_GROUP_NUM=1");
         }
         storageGroupReady = true;
     }

@@ -12,11 +12,11 @@ import java.util.Map;
 
 @Component
 public class AlarmReceiptPublisher {
-    private final RabbitTemplate rabbitTemplate;
+    private final ConfirmedMessagePublisher rabbitTemplate;
     private final ParkRabbitProperties properties;
     private final ObjectMapper objectMapper;
 
-    public AlarmReceiptPublisher(RabbitTemplate rabbitTemplate, ParkRabbitProperties properties, ObjectMapper objectMapper) {
+    public AlarmReceiptPublisher(ConfirmedMessagePublisher rabbitTemplate, ParkRabbitProperties properties, ObjectMapper objectMapper) {
         this.rabbitTemplate = rabbitTemplate;
         this.properties = properties;
         this.objectMapper = objectMapper;
@@ -31,8 +31,8 @@ public class AlarmReceiptPublisher {
             result.put("status", status);
             result.put("error", error);
             result.put("processedAt", System.currentTimeMillis());
-            rabbitTemplate.convertAndSend(properties.exchange(), properties.resultRoutingKey(),
-                    objectMapper.writeValueAsString(result));
+            rabbitTemplate.send(properties.exchange(), properties.resultRoutingKey(), org.springframework.amqp.core.MessageBuilder
+                    .withBody(objectMapper.writeValueAsBytes(result)).setContentType("application/json").build());
         } catch (Exception exception) {
             throw new IllegalStateException("publish alarm receipt failed", exception);
         }
