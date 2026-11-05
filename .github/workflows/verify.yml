@@ -1,0 +1,30 @@
+name: Verify
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: ForAI/source
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: ForAI/source
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Check backend file size
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          files = list(Path("src").rglob("*.java"))
+          oversized = [str(p) for p in files if len(p.read_text(encoding="utf-8").splitlines()) > 400]
+          assert not oversized, oversized
+          PY
+      - name: Compile and test
+        run: mvn --batch-mode --no-transfer-progress -Dmaven.repo.local=../cache/maven clean verify
